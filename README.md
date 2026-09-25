@@ -2,7 +2,8 @@
 
 `bsst` (Binding Site Selection Tool) is the dry-lab **binding-site** filter
 for **iGEM PekingHSC 2026** (HEPHA-RNA). It keeps sense binding sites on a
-transcript 3′UTR that do not have a non-self BLAST hit. Optionally, you can use it
+transcript 3′UTR whose antisense element does not have a same-strand BLAST hit
+in another transcript's 5′UTR or 3′UTR. Optionally, you can use it
 to filter out binding sites that overlap high-frequency variants. It also provides
 an energy-calculation interface that gives some insight into those binding sites.
 
@@ -24,8 +25,10 @@ up-regulation: [docs/limitations.md](docs/limitations.md).
    `--gene` from Ensembl 111.
 2. Take sense sites from `--sites`. If `--sites` is not provided, slide 40 nt
    windows along that UTR. A supplied site must occur exactly once in the UTR.
-3. Drop a site when `blastn-short` finds a non-self hit of at least 20 nt.
-   `--gene` is required so the intended gene is not called an off-target.
+3. Drop a site when `blastn-short` finds a same-strand, non-self alignment of
+   at least 20 nt that overlaps another transcript's 5′UTR or 3′UTR. CDS-only
+   hits are kept. Raise the length with `--offtarget-min-length`. `--gene` is
+   required so the intended gene is not called an off-target.
 4. With `--variants`, also drop dbSNP `common_all` overlaps. With `--rnaup`,
    score only the sites that passed and rank them by total ΔG.
 
@@ -54,7 +57,8 @@ SSH alternative: `git clone git@github.com:sebaWEI/binding_site_selection_tool.g
 
 The script installs `uv` and the Python project into `.venv`, installs
 RNAup / BLAST+ / tabix with Homebrew when `brew` is on `PATH`, downloads
-the pinned databases, builds the BLAST index, and runs `check_requirements`.
+the pinned databases and GENCODE annotation, builds the BLAST index and the
+spliced UTR table, and runs `check_requirements`.
 
 **macOS / Linux:**
 
@@ -76,7 +80,8 @@ with conda; that is only a fallback, in [If the check failed](#if-the-check-fail
 ### 3. If the check passed, use bsst
 
 `check_requirements` exits 0 when `blastn`, `makeblastdb`, `blast_db`,
-`blast_db_identity`, `gencode_fasta`, and `gencode_fasta_identity` are `ok`.
+`blast_db_identity`, `gencode_fasta`, `gencode_fasta_identity`, and
+`gencode_utr_index` are `ok`.
 Go to [Usage](#usage).
 
 If any row is `missing` or `mismatch`, follow
@@ -114,6 +119,7 @@ slides the whole UTR unless you also pass `--sites`.
 
 `--variants` adds the dbSNP overlap filter. `--rnaup` scores only sites
 that passed and ranks them by total ΔG (more negative first).
+`--offtarget-min-length N` changes the UTR-hit length gate (default 20).
 
 When it finishes it prints `Run completed: runs/<timestamp>_<id>/`.
 Open that folder:
@@ -121,11 +127,17 @@ Open that folder:
 | File | What to look at |
 | -------------------- | ------------------------------------------- |
 | `candidates.tsv` | Sites that passed. `rank` and the energy columns stay empty unless you passed `--rnaup` |
-| `all_candidates.tsv` | Every site and its `failure_reason` |
+| `all_binding_sites.tsv` | Every site. A dropped site's `failure_reason` names the gene, transcript, 5′UTR or 3′UTR, identity, and both intervals |
+| `blast_matches.tsv` | One row per site and off-target gene. `region` is the UTR hit; `drops_site` is `yes` only when that hit also meets the length cutoff |
+| `blast_hits.tsv` | Full BLAST table, including reverse-strand hits that are ignored for filtering |
 | `run.log` | Commands that were actually executed |
 | `manifest.json` | Tool versions and which databases were used |
 
-The other bundled UTR is `examples/NSD2.FASTA`.
+The bundled examples are `examples/LETM1.fasta` / `examples/NSD2.FASTA`
+and the wet-lab sense sites in `examples/LETM1.sites.fasta` (9 tiles) and
+`examples/NSD2.sites.fasta` (18 tiles). Those site files are the reverse
+complements of the SnapGene binding domains, so each sequence matches the
+corresponding 3′UTR exactly once.
 
 Commands below use `uv run` so they work before activation. After
 `source .venv/bin/activate`, drop that prefix.
@@ -136,8 +148,9 @@ Commands below use `uv run` so they work before activation. After
 | `uv run bsst --help`                                               | Confirm the CLI is installed              |
 | `uv run bsst check_requirements`                                   | PATH + pinned files after setup           |
 | `uv run bsst resources`                                            | Print producer names and download URLs    |
-| `uv run bsst db init --dbsnp-common-all --gencode-v45-transcripts` | Download both databases and build BLAST   |
+| `uv run bsst db init --dbsnp-common-all --gencode-v45-transcripts` | Download the databases, build BLAST, and project 5′UTR / 3′UTR coordinates |
 | `uv run bsst filter --gene SYMBOL --sites FILE`                    | Usual run: gene plus sense sites          |
+| `uv run bsst filter --gene SYMBOL --sites FILE --offtarget-min-length 25` | Same run with a higher UTR-hit length gate |
 | `uv run bsst filter --gene SYMBOL --utr FILE`                      | Slide the whole UTR; often hits the 300 s BLAST limit |
 | `uv run bsst filter --gene SYMBOL`                                 | Fetch the 3′UTR, then slide it            |
 | `uv run bsst config show`                                          | Show local config paths                   |
@@ -180,16 +193,20 @@ conda install -y -c conda-forge -c bioconda viennarna blast htslib
 
 ViennaRNA builds: https://www.tbi.univie.ac.at/RNA/#download
 
-**`blast_db`, `gencode_fasta`, `variant_vcf`**
+**`blast_db`, `gencode_fasta`, `gencode_utr_index`, `variant_vcf`**
 
-Do not download these in a browser. This command checks SHA-256, writes the
-dbSNP VCF and GENCODE FASTA under `data/`, and builds the BLAST database:
+Do not download these in a browser. This command checks checksums, writes the
+dbSNP VCF, GENCODE FASTA, and GENCODE GFF3 under `data/`, builds the BLAST
+database, and writes `data/gencode.v45.utr_on_transcript.tsv`. That table is
+how a transcript-coordinate BLAST hit is called 5′UTR or 3′UTR. `filter`
+will not run without it:
 
 ```bash
 uv run bsst db init --dbsnp-common-all --gencode-v45-transcripts
 ```
 
-A checksum `mismatch` means the file is wrong or truncated. Re-run with
+A checksum `mismatch` means the file is wrong or truncated. For the
+GENCODE GFF3, `db init` deletes a bad copy and downloads again. Use
 `--force` only when you intend to replace the local copies. If the FASTA is
 already present but `blast_db` is not, build it yourself. Do **not** add
 `-parse_seqids` (GENCODE headers contain `|`):

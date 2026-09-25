@@ -9,7 +9,9 @@ off unless requested. There is no composite score.
 3′UTR (file or Ensembl 111)
     → supplied sense sites, or windows (40 nt)
     → drop sites that are missing or repeated on the UTR
-    → BLAST off-target filter
+    → BLAST against GENCODE 45 transcripts
+    → keep same-strand hits only; map them onto 5′UTR / 3′UTR
+    → drop sites with a UTR hit ≥ --offtarget-min-length (default 20)
     → optional dbSNP overlap filter (--variants)
     → optional RNAup on the sites that passed (--rnaup)
     → rank those by ΔG_total
@@ -32,10 +34,20 @@ offset.
 
 **BLAST.** `blastn -task blastn-short` against GENCODE 45 CHR transcripts
 (GRCh38.p14, 252930 sequences, all biotypes). Queries are DNA (`T`, never
-`U`). A non-self hit of **≥ 20 nt** flags the window. Identity and coverage
+`U`). A same-strand, non-self hit of **≥ 20 nt** that overlaps a 5′UTR or 3′UTR
+flags the window. CDS-only hits and transcripts with no UTR annotation do
+not. A hit with `sstart` > `send` is the element sequence on another
+transcript, not a site the element can bind, and is ignored. The dropped
+site's `failure_reason` names the gene, transcript, UTR, identity, and
+both intervals. Identity and coverage
 floors default to 0. Self hits match gene symbols and ENST accessions with
 or without `.version`. Do not pass `-parse_seqids` to `makeblastdb`
 (GENCODE headers contain `|`).
+
+`blast_matches.tsv` is the table to read. It keeps the longest same-strand
+alignment per site and gene. `region` is `5'UTR`, `3'UTR`, or both when
+the alignment overlaps that part of the spliced transcript. `drops_site`
+is `yes` only for those UTR hits that also meet the length cutoff.
 
 All pending sites go out in one `blastn` process, which is stopped after
 300 seconds. Use `--sites` for the sequences you intend to test. Omitting
@@ -67,25 +79,30 @@ Every invocation writes `runs/<UTC timestamp>_<run id>/`:
 | `manifest.json` | status, parameters, input SHA-256, tool versions, databases |
 | `run.log` | stages plus full external commands, stdout, stderr |
 | `inputs/target.fasta` | exact analyzed sequence |
-| `all_candidates.tsv` | every site and `failure_reason` |
+| `all_binding_sites.tsv` | every site and `failure_reason` |
 | `candidates.tsv` | sites with `status=pass`. With `--rnaup`, only anchored sites (`status=eligible`), ordered by ΔG_total |
-| `blast_hits.tsv` | raw BLAST hits plus self/risk flags |
+| `blast_hits.tsv` | raw BLAST hits plus `is_self`, `match_region`, and `offtarget_risk` |
+| `blast_matches.tsv` | longest same-strand hit per site and gene, with `region` and `drops_site` |
 
 `status=pass` is the default result. Energy columns, `interaction_*`,
 `anchor_overlap`, and `rank` are filled only when you passed `--rnaup`.
+A dropped site's `failure_reason` looks like
+`3'UTR of SIPA1L1 (SIPA1L1-207), 21 nt, 95.2% identity, site 20-40, transcript 1126-1146`.
 
 | Field | Meaning |
 |-------|---------|
 | genomic `start`/`end` | 0-based half-open |
 | `bd_sequence` | reverse complement of the sense site, DNA notation |
+| `match_region` / `region` | `5'UTR`, `3'UTR`, `5'UTR+3'UTR`, or empty when the hit misses both |
+| `drops_site` | `yes` when that UTR hit also meets `--offtarget-min-length` |
 | `interaction_target_*`, `interaction_query_*` | RNAup 1-based inclusive, local (`--rnaup` only) |
 | `interaction_utr_*` | mapped 0-based half-open UTR offsets (`--rnaup` only) |
 | energy columns | kcal/mol (`--rnaup` only) |
 | `anchor_overlap` | fraction of the predicted target interaction inside the site (`--rnaup` only) |
 | `rank` | 1 = most negative ΔG_total (`--rnaup` only) |
 
-If `candidates.tsv` is empty, read `all_candidates.tsv` → `failure_reason`:
-`not_in_utr`, `ambiguous`, `blast_offtarget`, and with `--variants`
+If `candidates.tsv` is empty, read `all_binding_sites.tsv` → `failure_reason`:
+`not_in_utr`, `ambiguous`, a 5′UTR or 3′UTR match description, and with `--variants`
 `variant_overlap`. With `--rnaup`, a site that passed BLAST can still fail
 as `off_anchor_interaction` or `RNAup_*`. Do not pool these tables with
 runs from before the filter refactor.

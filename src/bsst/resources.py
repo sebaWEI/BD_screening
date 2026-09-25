@@ -108,6 +108,26 @@ GENCODE_V45_TRANSCRIPTS: dict[str, Any] = {
     ),
 }
 
+# CHR GFF3 from the same release. five_prime_UTR / three_prime_UTR are genomic;
+# db init projects them onto spliced transcript coordinates.
+GENCODE_V45_ANNOTATION: dict[str, Any] = {
+    "id": "gencode_v45_annotation_chr_gff3",
+    "role": "utr_annotation",
+    "producer": "GENCODE",
+    "filename": "gencode.v45.annotation.gff3.gz",
+    "utr_index_filename": "gencode.v45.utr_on_transcript.tsv",
+    "url": (
+        "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/"
+        "release_45/gencode.v45.annotation.gff3.gz"
+    ),
+    "release": "45",
+    "ensembl_version": "111",
+    "assembly": "GRCh38.p14",
+    "transcriptome_release": "GENCODE 45 CHR GFF3 → spliced 5′UTR / 3′UTR",
+    "archive_md5": "e17bf2c2d47a0cdf28f62591fb4600ed",
+    "archive_sha256": "",
+}
+
 # ---------------------------------------------------------------------------
 # Ensembl REST archive matching GENCODE 45 (Ensembl 111, January 2024)
 # https://e111.rest.ensembl.org is the versioned archive, not rest.ensembl.org.
@@ -212,6 +232,7 @@ def catalog() -> tuple[dict[str, Any], ...]:
     return (
         DBSNP_B151_GRCH38P7_COMMON_ALL,
         GENCODE_V45_TRANSCRIPTS,
+        GENCODE_V45_ANNOTATION,
         ENSEMBL_REST,
         BLASTN_SHORT,
         RNAUP,
@@ -239,6 +260,19 @@ def bundled_dbsnp_vcf() -> Path:
 
 def bundled_gencode_fasta() -> Path:
     return data_dir() / GENCODE_V45_TRANSCRIPTS["filename"]
+
+
+def bundled_gencode_gff3() -> Path:
+    return data_dir() / GENCODE_V45_ANNOTATION["filename"]
+
+
+def bundled_utr_index() -> Path:
+    return data_dir() / GENCODE_V45_ANNOTATION["utr_index_filename"]
+
+
+def discover_utr_index() -> Path | None:
+    path = bundled_utr_index()
+    return path if path.is_file() else None
 
 
 def bundled_blast_db_prefix() -> Path:

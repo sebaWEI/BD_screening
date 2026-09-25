@@ -12,11 +12,12 @@ The pipeline records each producer string separately.
 | -------------- | --------------------------------------- | -------------------------------------- | ----------- |
 | Variant VCF    | NCBI dbSNP `common_all_20180418.vcf.gz` | b151, 20180418                         | GRCh38.p7   |
 | BLAST subject  | GENCODE `gencode.v45.transcripts.fa.gz` | Release 45 = Ensembl 111, 2024-01, CHR | GRCh38.p14  |
+| UTR annotation | GENCODE `gencode.v45.annotation.gff3.gz` | Release 45 CHR; 5′UTR and 3′UTR projected onto spliced transcripts | GRCh38.p14  |
 | 3′UTR fetch    | `https://e111.rest.ensembl.org`         | Ensembl 111                            | GRCh38.p14  |
 | Off-target     | NCBI BLAST+ `blastn -task blastn-short` | local `blastn -version`                | —           |
 | Binding energy | ViennaRNA `RNAup`                       | local `RNAup --version`                | —           |
-| Example LETM1  | `examples/LETM1.fasta`                  | ENST00000302787 (v45 LETM1-201 `.3`)   | chrom=4 BED |
-| Example NSD2   | `examples/NSD2.FASTA`                   | ENST00000508803 (v45 NSD2-218 `.6`)    | chrom=4 BED |
+| Example LETM1  | `examples/LETM1.fasta` + `examples/LETM1.sites.fasta` | ENST00000302787; 9 wet-lab 3′UTR tiles | chrom=4 BED |
+| Example NSD2   | `examples/NSD2.FASTA` + `examples/NSD2.sites.fasta` | ENST00000508803; 18 wet-lab 3′UTR tiles | chrom=4 BED |
 
 
 `--utr` is the durable path. Omitting it talks only to the Ensembl 111
@@ -27,11 +28,13 @@ complement of the plus-strand genome slice.
 ## Checksums
 
 `bsst db init --dbsnp-common-all --gencode-v45-transcripts` checks SHA-256
-of the downloaded bytes (and the uncompressed GENCODE FASTA) against
-`src/bsst/resources.py`. Those digests match the producer MD5 files (NCBI
-`*.vcf.gz.md5`, GENCODE `MD5SUMS`). A mismatch aborts; `--force`
-re-downloads. Custom `--variant-url` / `--transcriptome-url` need an
-explicit `--*-sha256` if you want a checksum.
+of the dbSNP VCF and GENCODE FASTA archives (and the uncompressed FASTA)
+against `src/bsst/resources.py`. The GENCODE annotation GFF3 is checked
+against the producer MD5 `e17bf2c2d47a0cdf28f62591fb4600ed`. Those digests
+match the producer MD5 files (NCBI `*.vcf.gz.md5`, GENCODE `MD5SUMS`). A
+mismatch aborts for the VCF and FASTA. A truncated GFF3 is deleted and
+downloaded again. `--force` re-downloads. Custom `--variant-url` /
+`--transcriptome-url` need an explicit `--*-sha256` if you want a checksum.
 
 ```bash
 uv run bsst db init --dbsnp-common-all --gencode-v45-transcripts
@@ -125,3 +128,19 @@ identify the release from the first header alone.
 BLAST compares **transcript sequence**, not genomic intervals, so p7 vs p14
 does not shift VCF-style coordinates. The off-target subject is the
 January 2024 GENCODE 45 set, not live Ensembl.
+
+## UTR coordinates (GENCODE 45 CHR GFF3)
+
+[https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_45/gencode.v45.annotation.gff3.gz](https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_45/gencode.v45.annotation.gff3.gz)
+
+The same `bsst db init --gencode-v45-transcripts` command downloads this
+GFF3 (~58 MB) and writes `data/gencode.v45.utr_on_transcript.tsv`. Each row
+is one 5′UTR or 3′UTR interval on a spliced transcript, 1-based and
+inclusive, in mRNA 5′→3′ order. `filter` uses that table. A same-strand
+BLAST hit is an off-target only when its transcript interval overlaps one
+of those rows and the alignment is at least `--offtarget-min-length` nt.
+
+The archive MD5 published by GENCODE is `e17bf2c2d47a0cdf28f62591fb4600ed`.
+A truncated or wrong local copy is deleted and downloaded again; a mismatch
+after download aborts `db init`. Local index: `data/gencode.v45.utr_on_transcript.tsv`
+(~5.5 MB).

@@ -11,13 +11,17 @@ from typing import Any
 
 from .config import load_config, save_config
 from .pipeline import resolve_executable
+from .annotation import write_utr_index
 from .resources import (
     DBSNP_B151_GRCH38P7_COMMON_ALL,
+    GENCODE_V45_ANNOTATION,
     GENCODE_V45_TRANSCRIPTS,
     blast_db_is_present,
     bundled_blast_db_prefix,
     bundled_dbsnp_vcf,
     bundled_gencode_fasta,
+    bundled_gencode_gff3,
+    bundled_utr_index,
     data_dir,
     discover_blast_db,
     discover_variant_vcf,
@@ -28,12 +32,16 @@ from .resources import (
 )
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
+def _digest(path: Path, algorithm: str) -> str:
+    digest = hashlib.new(algorithm)
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _sha256(path: Path) -> str:
+    return _digest(path, "sha256")
 
 
 def download_file(
@@ -157,6 +165,23 @@ def initialize(
             if force or not blast_db_is_present(prefix):
                 _make_blast_db(fasta, prefix, title=gencode["blast_title"])
             blast_db = str(prefix)
+        gff3 = bundled_gencode_gff3()
+        expected_md5 = GENCODE_V45_ANNOTATION["archive_md5"]
+        if gff3.is_file() and _digest(gff3, "md5") != expected_md5:
+            gff3.unlink()
+        if not gff3.is_file() or force:
+            download_file(
+                GENCODE_V45_ANNOTATION["url"],
+                gff3,
+                expected_sha256=GENCODE_V45_ANNOTATION["archive_sha256"] or None,
+                retries=retries,
+                force=force,
+            )
+        if _digest(gff3, "md5") != expected_md5:
+            raise ValueError(f"checksum mismatch for existing file: {gff3}")
+        index = bundled_utr_index()
+        if force or not index.is_file():
+            write_utr_index(gff3, index)
         transcriptome_url = None
 
     if transcriptome_url:
@@ -269,6 +294,8 @@ def tool_report() -> list[dict[str, str]]:
         rows.append(_row("gencode_fasta_identity", fasta_detail, fasta_ok, missing_ok=False))
     else:
         rows.append(_row("gencode_fasta", None, False))
+    utr_index = bundled_utr_index()
+    rows.append(_row("gencode_utr_index", utr_index if utr_index.is_file() else None, utr_index.is_file(), required=True))
     rows.extend(
         [
             _row("transcriptome_source", cfg.get("transcriptome_source"), bool(cfg.get("transcriptome_source"))),

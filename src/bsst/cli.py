@@ -112,7 +112,7 @@ def check_requirements() -> None:
     for row in report:
         table.add_row(row["resource"], row["value"], row["status"])
     console.print(table)
-    console.print("A BLAST filter needs blastn, makeblastdb, and blast_db `ok`.")
+    console.print("A BLAST filter needs blastn, makeblastdb, blast_db, and gencode_utr_index `ok`.")
     console.print("RNAup is optional and used only with `bsst filter --rnaup`.")
     console.print("variant_vcf is optional and used only with `bsst filter --variants`.")
     console.print("tabix is optional but recommended for large VCF region queries.")
@@ -167,6 +167,7 @@ def _options(
     include_both: bool,
     min_anchor_overlap: float,
     min_af: float | None,
+    offtarget_min_length: int,
 ) -> SelectOptions:
     return SelectOptions(
         window_size=window_size,
@@ -176,6 +177,7 @@ def _options(
         include_both=include_both,
         min_anchor_overlap=min_anchor_overlap,
         min_af=min_af,
+        offtarget_min_length=offtarget_min_length,
     )
 
 
@@ -251,6 +253,10 @@ def filter_sites(
     min_af: float | None = typer.Option(
         None, min=0.0, max=1.0, help="With --variants, ignore variants below this frequency."
     ),
+    offtarget_min_length: int = typer.Option(
+        20, "--offtarget-min-length", min=1,
+        help="Fail a site when a non-self BLAST alignment is at least this many nt. Default 20.",
+    ),
 ) -> None:
     if utr is None:
         try:
@@ -269,7 +275,10 @@ def filter_sites(
     resolved_blast = blast_db or cfg.get("blast_db") or discover_blast_db()
     run_dir = select(
         target,
-        _options(window_size, step, context, temperature, include_both, min_anchor_overlap, min_af),
+        _options(
+            window_size, step, context, temperature, include_both,
+            min_anchor_overlap, min_af, offtarget_min_length,
+        ),
         runs_dir=runs_dir or Path(cfg["runs_dir"]),
         variant_vcf=resolved_vcf,
         blast_db=resolved_blast,

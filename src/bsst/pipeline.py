@@ -24,7 +24,8 @@ from Bio.Seq import Seq
 from .config import load_config
 from .logging import log_command, run_logger, write_manifest
 from .models import MODEL_VERSION, SelectOptions, Target
-from .resources import BLASTN_SHORT
+from .annotation import load_utr_index, utr_regions
+from .resources import BLASTN_SHORT, discover_utr_index
 
 WINDOW_COLUMNS = [
     "name", "chrom", "start", "end", "strand", "utr_start", "utr_end",
@@ -387,6 +388,95 @@ def _tokenize_subject(row: pd.Series) -> set[str]:
     return tokens
 
 
+_BIOTYPE_LABELS = {
+    "protein_coding": "protein-coding mRNA",
+    "lncRNA": "lncRNA",
+    "retained_intron": "retained intron",
+    "nonsense_mediated_decay": "NMD transcript",
+    "processed_transcript": "processed transcript",
+    "protein_coding_CDS_not_defined": "protein-coding, CDS not defined",
+    "miRNA": "miRNA",
+    "snRNA": "snRNA",
+    "snoRNA": "snoRNA",
+    "rRNA": "rRNA",
+    "rRNA_pseudogene": "rRNA pseudogene",
+    "Mt_tRNA": "mitochondrial tRNA",
+    "Mt_rRNA": "mitochondrial rRNA",
+}
+
+
+def _gencode_fields(title: str) -> dict[str, str]:
+    """GENCODE header: transcript|gene|havana gene|havana transcript|name|gene name|length|biotype|."""
+    parts = str(title).split("|")
+    if len(parts) < 8:
+        return {"gene": "", "transcript": "", "transcript_type": "", "transcript_length": ""}
+    biotype = parts[7]
+    return {
+        "gene": parts[5],
+        "transcript": parts[4] or parts[0],
+        "transcript_type": _BIOTYPE_LABELS.get(biotype, biotype),
+        "transcript_length": parts[6],
+    }
+
+
+def readable_blast_matches(hits: pd.DataFrame) -> pd.DataFrame:
+    """One row per site and gene: the longest same-strand, non-self alignment."""
+    columns = [
+        "site", "matched_gene", "transcript", "transcript_type", "region",
+        "identity_pct", "aligned_nt", "site_start", "site_end",
+        "transcript_start", "transcript_end", "transcript_length",
+        "n_transcripts", "evalue", "drops_site",
+    ]
+    if hits.empty or "stitle" not in hits.columns:
+        return pd.DataFrame(columns=columns)
+    rows = []
+    for record in hits.to_dict("records"):
+        if bool(record.get("is_self")) or not subject_same_orientation(record):
+            continue
+        fields = _gencode_fields(str(record.get("stitle", "")))
+        sstart, send = int(record["sstart"]), int(record["send"])
+        rows.append({
+            "site": record["qseqid"],
+            "matched_gene": fields["gene"],
+            "transcript": fields["transcript"],
+            "transcript_type": fields["transcript_type"],
+            "region": str(record.get("match_region") or ""),
+            "identity_pct": float(record["pident"]),
+            "aligned_nt": int(record["length"]),
+            "site_start": int(record["qstart"]),
+            "site_end": int(record["qend"]),
+            "transcript_start": min(sstart, send),
+            "transcript_end": max(sstart, send),
+            "transcript_length": fields["transcript_length"],
+            "evalue": record["evalue"],
+            "drops_site": bool(record.get("offtarget_risk")),
+            "_key": fields["gene"] or fields["transcript"] or str(record.get("sseqid")),
+        })
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    frame = pd.DataFrame(rows)
+    counts = frame.groupby(["site", "_key"]).size().rename("n_transcripts")
+    frame = frame.sort_values(
+        ["aligned_nt", "identity_pct"], ascending=[False, False]
+    ).drop_duplicates(["site", "_key"])
+    frame = frame.merge(counts.reset_index(), on=["site", "_key"])
+    frame["drops_site"] = frame["drops_site"].map({True: "yes", False: "no"})
+    frame = frame.sort_values(
+        ["site", "drops_site", "aligned_nt"], ascending=[True, False, False]
+    )
+    return frame[columns]
+
+
+def subject_same_orientation(row: pd.Series) -> bool:
+    """True when the subject interval runs 5′→3′, same sequence as the sense site.
+
+    blastn reports a minus-strand hit with sstart > send. That hit is the
+    binding-element sequence itself on another transcript, not a place the
+    element can pair.
+    """
+    return int(row["sstart"]) < int(row["send"])
+
+
 def blast_hit_is_self(row: pd.Series, self_tokens: Iterable[str]) -> bool:
     subject_tokens = _tokenize_subject(row)
     return any(_accession_keys(token) & subject_tokens for token in self_tokens)
@@ -413,6 +503,19 @@ def blast_hit_is_risk(
     )
 
 
+def exclusion_reason(row: pd.Series) -> str:
+    """Plain description of the UTR hit that removed a site."""
+    fields = _gencode_fields(str(row.get("stitle", "")))
+    gene = fields["gene"] or "unknown gene"
+    transcript = fields["transcript"] or str(row.get("sseqid", ""))
+    return (
+        f"{row['match_region']} of {gene} ({transcript}), "
+        f"{int(row['length'])} nt, {float(row['pident']):.1f}% identity, "
+        f"site {int(row['qstart'])}-{int(row['qend'])}, "
+        f"transcript {int(row['sstart'])}-{int(row['send'])}"
+    )
+
+
 def run_blast(
     candidates: pd.DataFrame,
     blast_db: str,
@@ -420,10 +523,18 @@ def run_blast(
     self_tokens: Iterable[str],
     options: SelectOptions,
     blastn_exe: str | None = None,
+    utr_index: dict | None = None,
 ) -> pd.DataFrame:
     exe = resolve_executable("blastn", blastn_exe)
     if not exe:
         raise RuntimeError("blastn_not_found")
+    if utr_index is None:
+        index_path = discover_utr_index()
+        if index_path is None:
+            raise RuntimeError(
+                "GENCODE UTR annotation is required; run `bsst db init --gencode-v45-transcripts`."
+            )
+        utr_index = load_utr_index(index_path)
     query = "".join(
         f">{row['name']}\n{str(row['target_sequence']).upper().replace('U', 'T')}\n"
         for _, row in candidates.iterrows()
@@ -444,10 +555,20 @@ def run_blast(
             hits[column] = pd.to_numeric(hits[column])
     if not hits.empty:
         hits["is_self"] = hits.apply(lambda r: blast_hit_is_self(r, self_tokens), axis=1)
+        hits["match_region"] = [
+            utr_regions(utr_index or {}, str(title).split("|", 1)[0], int(start), int(end))
+            if int(start) < int(end) else ""
+            for title, start, end in zip(hits["stitle"], hits["sstart"], hits["send"])
+        ]
         hits["offtarget_risk"] = hits.apply(
-            lambda r: not r["is_self"] and blast_hit_is_risk(
-                r, int(r["qlen"]), options.offtarget_min_length,
-                options.min_identity, options.min_coverage,
+            lambda r: (
+                not r["is_self"]
+                and subject_same_orientation(r)
+                and "UTR" in str(r["match_region"])
+                and blast_hit_is_risk(
+                    r, int(r["qlen"]), options.offtarget_min_length,
+                    options.min_identity, options.min_coverage,
+                )
             ),
             axis=1,
         )
@@ -546,12 +667,16 @@ def select(
             hits = run_blast(
                 all_candidates.loc[active], blast_db, logger, self_tokens, options, blastn_exe
             )
-            risky = set(hits.loc[hits["offtarget_risk"], "qseqid"])
-            mask = all_candidates["name"].isin(risky)
-            all_candidates.loc[mask, ["status", "failure_reason"]] = ["failed", "blast_offtarget"]
+            risky_hits = hits.loc[hits["offtarget_risk"]]
+            for name, group in risky_hits.groupby("qseqid"):
+                best = group.sort_values(["length", "pident"], ascending=False).iloc[0]
+                all_candidates.loc[
+                    all_candidates["name"].eq(name), ["status", "failure_reason"]
+                ] = ["failed", exclusion_reason(best)]
             active = all_candidates["status"].eq("pending")
         manifest["stage_counts"]["after_blast"] = int(active.sum())
         hits.to_csv(run_dir / "blast_hits.tsv", sep="\t", index=False)
+        readable_blast_matches(hits).to_csv(run_dir / "blast_matches.tsv", sep="\t", index=False)
 
         logger.info("stage=variants")
         if use_variants and variant_vcf:
@@ -604,7 +729,7 @@ def select(
             passed_table = all_candidates.loc[passed, WINDOW_COLUMNS].sort_values("rank")
         else:
             passed_table = all_candidates.loc[passed, WINDOW_COLUMNS]
-        all_candidates[WINDOW_COLUMNS].to_csv(run_dir / "all_candidates.tsv", sep="\t", index=False)
+        all_candidates[WINDOW_COLUMNS].to_csv(run_dir / "all_binding_sites.tsv", sep="\t", index=False)
         passed_table.to_csv(run_dir / "candidates.tsv", sep="\t", index=False)
         manifest["status"] = "completed"
         manifest["candidate_count"] = int(passed.sum())

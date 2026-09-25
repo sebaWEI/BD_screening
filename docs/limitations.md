@@ -15,7 +15,12 @@ model, and it does not know about:
 - isoform abundance or construct context
 - genome (DNA) off-targets — BLAST here is against **transcripts**
 
-BLAST always uses the pinned transcriptome. The variant filter runs only
+BLAST always uses the pinned transcriptome and the GENCODE 45 UTR index.
+Without `data/gencode.v45.utr_on_transcript.tsv`, `filter` refuses to run.
+A site is dropped only when a same-strand hit of at least
+`--offtarget-min-length` nt (default 20) overlaps a 5′UTR or 3′UTR on the
+spliced transcript. Hits on the reverse strand, CDS-only hits, and
+transcripts with no UTR annotation are kept. The variant filter runs only
 with `--variants` (and optional `--min-af`).
 
 **`--utr`** is the reproducible path. Omitting it always takes the
@@ -27,6 +32,7 @@ isoform you want, and the archive will eventually retire.
 | Resource | What it actually is |
 |----------|---------------------|
 | BLAST subject | GENCODE 45 / Ensembl 111 / GRCh38.**p14** / all CHR transcripts |
+| UTR coordinates | same release, `gencode.v45.annotation.gff3.gz`, projected to `gencode.v45.utr_on_transcript.tsv` |
 | Variant VCF | NCBI dbSNP b151 `common_all` / GRCh38.**p7** |
 | omitted `--utr` | Ensembl REST **archive 111** only (`e111.rest.ensembl.org`) |
 
