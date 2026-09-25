@@ -64,30 +64,47 @@ def generate_windows(target: Target, window_size: int = 40, step: int = 1) -> pd
     seq = target.sequence.upper().replace("U", "T")
     rows = []
     for offset in range(0, len(seq) - window_size + 1, step):
-        if target.start is None or target.end is None:
-            start = end = pd.NA
-        elif target.strand == "+":
-            start, end = target.start + offset, target.start + offset + window_size
-        else:
-            end, start = target.end - offset, target.end - offset - window_size
         window = seq[offset : offset + window_size]
-        rows.append(
-            {
-                "name": f"{target.name}_w{offset}",
-                "chrom": target.chrom,
-                "start": start,
-                "end": end,
-                "strand": target.strand,
-                "utr_start": offset,
-                "utr_end": offset + window_size,
-                "target_sequence": window,
-                "bd_sequence": str(Seq(window).reverse_complement()),
-                "gc_fraction": (window.count("G") + window.count("C")) / len(window),
-                "status": "pending",
-                "failure_reason": "",
-                "model_version": MODEL_VERSION,
-            }
-        )
+        rows.append(_window_row(target, f"{target.name}_w{offset}", window, offset))
+    return _windows_frame(rows)
+
+
+def _genomic_interval(target: Target, offset: int, length: int) -> tuple[object, object]:
+    if target.start is None or target.end is None:
+        return pd.NA, pd.NA
+    if target.strand == "+":
+        return target.start + offset, target.start + offset + length
+    return target.end - offset - length, target.end - offset
+
+
+def _window_row(
+    target: Target,
+    name: str,
+    window: str,
+    offset: int,
+    *,
+    status: str = "pending",
+    failure_reason: str = "",
+) -> dict[str, object]:
+    start, end = _genomic_interval(target, offset, len(window))
+    return {
+        "name": name,
+        "chrom": target.chrom,
+        "start": start,
+        "end": end,
+        "strand": target.strand,
+        "utr_start": offset,
+        "utr_end": offset + len(window),
+        "target_sequence": window,
+        "bd_sequence": str(Seq(window).reverse_complement()),
+        "gc_fraction": (window.count("G") + window.count("C")) / len(window) if window else pd.NA,
+        "status": status,
+        "failure_reason": failure_reason,
+        "model_version": MODEL_VERSION,
+    }
+
+
+def _windows_frame(rows: list[dict[str, object]]) -> pd.DataFrame:
     return pd.DataFrame(
         rows,
         columns=[
@@ -96,6 +113,31 @@ def generate_windows(target: Target, window_size: int = 40, step: int = 1) -> pd
             "failure_reason", "model_version",
         ],
     )
+
+
+def sites_on_utr(target: Target, sites: list[tuple[str, str]]) -> pd.DataFrame:
+    """Place sense sites on the UTR. Zero or multiple matches are not BLASTed."""
+    seq = target.sequence.upper().replace("U", "T")
+    rows: list[dict[str, object]] = []
+    for name, raw in sites:
+        site = raw.upper().replace("U", "T")
+        positions: list[int] = []
+        cursor = 0
+        while site and (found := seq.find(site, cursor)) >= 0:
+            positions.append(found)
+            cursor = found + 1
+        if len(positions) != 1:
+            reason = "ambiguous" if len(positions) > 1 else "not_in_utr"
+            rows.append(
+                _window_row(target, name, site, 0, status="failed", failure_reason=reason)
+            )
+            rows[-1]["utr_start"] = pd.NA
+            rows[-1]["utr_end"] = pd.NA
+            rows[-1]["start"] = pd.NA
+            rows[-1]["end"] = pd.NA
+            continue
+        rows.append(_window_row(target, name, site, positions[0]))
+    return _windows_frame(rows)
 
 
 def complexity_failure(
@@ -446,8 +488,9 @@ def select(
     runs_dir: Path = Path("runs"),
     variant_vcf: Path | None = None,
     blast_db: str | None = None,
-    skip_variants: bool = False,
-    skip_blast: bool = False,
+    sites: list[tuple[str, str]] | None = None,
+    use_variants: bool = False,
+    use_rnaup: bool = False,
     self_tokens: Iterable[str] = (),
     rnaup_exe: str | None = None,
     blastn_exe: str | None = None,
@@ -487,22 +530,31 @@ def select(
     write_manifest(run_dir / "manifest.json", manifest)
     (inputs_dir / "target.fasta").write_text(f">{target.name}\n{target.sequence.upper()}\n")
     try:
-        logger.info("stage=windows")
-        all_candidates = generate_windows(target, options.window_size, options.step)
+        logger.info("stage=candidates")
+        if sites is None:
+            all_candidates = generate_windows(target, options.window_size, options.step)
+        else:
+            all_candidates = sites_on_utr(target, sites)
         manifest["stage_counts"]["generated"] = len(all_candidates)
-        for idx, row in all_candidates.iterrows():
-            reason = complexity_failure(
-                row["target_sequence"], options.min_gc, options.max_gc, options.max_homopolymer
-            )
-            if reason:
-                all_candidates.loc[idx, ["status", "failure_reason"]] = ["failed", reason]
-        manifest["stage_counts"]["after_complexity"] = int(
-            all_candidates["status"].eq("pending").sum()
-        )
-
         active = all_candidates["status"].eq("pending")
+
+        logger.info("stage=blast")
+        if not blast_db:
+            raise RuntimeError("BLAST database is required; run `bsst db init`.")
+        hits = pd.DataFrame(columns=BLAST_COLUMNS + ["is_self", "offtarget_risk"])
+        if active.any():
+            hits = run_blast(
+                all_candidates.loc[active], blast_db, logger, self_tokens, options, blastn_exe
+            )
+            risky = set(hits.loc[hits["offtarget_risk"], "qseqid"])
+            mask = all_candidates["name"].isin(risky)
+            all_candidates.loc[mask, ["status", "failure_reason"]] = ["failed", "blast_offtarget"]
+            active = all_candidates["status"].eq("pending")
+        manifest["stage_counts"]["after_blast"] = int(active.sum())
+        hits.to_csv(run_dir / "blast_hits.tsv", sep="\t", index=False)
+
         logger.info("stage=variants")
-        if not skip_variants and variant_vcf:
+        if use_variants and variant_vcf:
             if target.chrom is None or target.start is None or target.end is None:
                 logger.warning("variant filtering skipped: target has no genomic coordinates")
             else:
@@ -514,60 +566,51 @@ def select(
                     end=int(target.end),
                 )
                 for idx, row in all_candidates.loc[active].iterrows():
+                    if pd.isna(row["start"]) or pd.isna(row["end"]):
+                        continue
                     if variant_overlaps(str(row["chrom"]), int(row["start"]), int(row["end"]), variants):
                         all_candidates.loc[idx, ["status", "failure_reason"]] = [
                             "failed", "variant_overlap",
                         ]
                 active = all_candidates["status"].eq("pending")
-        elif skip_variants:
-            logger.info("variant filtering explicitly skipped")
-        else:
+        elif use_variants:
             logger.warning("variant filtering skipped: no VCF configured")
+        else:
+            logger.info("variant filtering off")
         manifest["stage_counts"]["after_variants"] = int(active.sum())
 
-        logger.info("stage=blast")
-        hits = pd.DataFrame(columns=BLAST_COLUMNS + ["is_self", "offtarget_risk"])
-        if not skip_blast and blast_db and active.any():
-            hits = run_blast(
-                all_candidates.loc[active], blast_db, logger, self_tokens, options, blastn_exe
-            )
-            risky = set(hits.loc[hits["offtarget_risk"], "qseqid"])
-            mask = all_candidates["name"].isin(risky)
-            all_candidates.loc[mask, ["status", "failure_reason"]] = ["failed", "blast_offtarget"]
-            active = all_candidates["status"].eq("pending")
-        elif skip_blast:
-            logger.info("BLAST filtering explicitly skipped")
-        else:
-            logger.warning("BLAST filtering skipped: no database configured")
-        manifest["stage_counts"]["after_blast"] = int(active.sum())
-        hits.to_csv(run_dir / "blast_hits.tsv", sep="\t", index=False)
-
         logger.info("stage=rnaup")
-        if active.any() and not resolve_executable("RNAup", rnaup_exe):
-            raise RuntimeError(
-                "RNAup is required for scoring but was not found; run `bsst check_requirements`."
-            )
-        for idx, row in all_candidates.loc[active].iterrows():
-            result = run_rnaup_candidate(target, row, options, logger, rnaup_exe)
-            for key, value in result.items():
-                all_candidates.loc[idx, key] = value
+        if use_rnaup:
+            if active.any() and not resolve_executable("RNAup", rnaup_exe):
+                raise RuntimeError(
+                    "RNAup was requested but was not found; run `bsst check_requirements`."
+                )
+            for idx, row in all_candidates.loc[active].iterrows():
+                result = run_rnaup_candidate(target, row, options, logger, rnaup_exe)
+                for key, value in result.items():
+                    all_candidates.loc[idx, key] = value
+            passed = all_candidates["status"].eq("eligible")
+        else:
+            all_candidates.loc[active, "status"] = "pass"
+            passed = all_candidates["status"].eq("pass")
 
         for column in WINDOW_COLUMNS:
             if column not in all_candidates:
                 all_candidates[column] = pd.NA
-        eligible = all_candidates["status"].eq("eligible")
-        ranked = all_candidates.loc[eligible].sort_values("rnaup_dG_total").copy()
-        ranked["rank"] = range(1, len(ranked) + 1)
-        all_candidates.loc[ranked.index, "rank"] = ranked["rank"]
+        if use_rnaup:
+            ranked = all_candidates.loc[passed].sort_values("rnaup_dG_total").copy()
+            ranked["rank"] = range(1, len(ranked) + 1)
+            all_candidates.loc[ranked.index, "rank"] = ranked["rank"]
+            passed_table = all_candidates.loc[passed, WINDOW_COLUMNS].sort_values("rank")
+        else:
+            passed_table = all_candidates.loc[passed, WINDOW_COLUMNS]
         all_candidates[WINDOW_COLUMNS].to_csv(run_dir / "all_candidates.tsv", sep="\t", index=False)
-        all_candidates.loc[eligible, WINDOW_COLUMNS].sort_values("rank").to_csv(
-            run_dir / "candidates.tsv", sep="\t", index=False
-        )
+        passed_table.to_csv(run_dir / "candidates.tsv", sep="\t", index=False)
         manifest["status"] = "completed"
-        manifest["candidate_count"] = int(eligible.sum())
-        manifest["stage_counts"]["eligible"] = int(eligible.sum())
-        if not eligible.any():
-            logger.warning("pipeline completed with zero eligible candidates")
+        manifest["candidate_count"] = int(passed.sum())
+        manifest["stage_counts"]["passed"] = int(passed.sum())
+        if not passed.any():
+            logger.warning("pipeline completed with zero passing candidates")
         return run_dir
     except Exception as exc:
         logger.exception("pipeline failed")

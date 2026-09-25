@@ -1,19 +1,18 @@
 # Methods
 
-Default: 40 nt windows, step 1, on a transcript-oriented 3′UTR. Eligible
-binding domains (BDs) are ranked by RNAup total ΔG (more negative first).
-There is no composite score; energy terms stay separate.
+Default: BLAST-filter sense sites on a transcript-oriented 3′UTR. Sites
+come from `--sites`, or from 40 nt windows stepped by 1. `--gene` is
+required so self hits are ignored. Variant overlap and RNAup ranking are
+off unless requested. There is no composite score.
 
 ```text
-3′UTR FASTA
-    → windows (40 nt)
-    → drop extreme GC / homopolymers
-    → optional dbSNP overlap filter
-    → optional BLAST off-target filter
-    → reverse-complement → BD
-    → RNAup vs window + 120 nt flanks
-    → keep only on-window (anchored) interactions
-    → rank by ΔG_total
+3′UTR (file or Ensembl 111)
+    → supplied sense sites, or windows (40 nt)
+    → drop sites that are missing or repeated on the UTR
+    → BLAST off-target filter
+    → optional dbSNP overlap filter (--variants)
+    → optional RNAup on the sites that passed (--rnaup)
+    → rank those by ΔG_total
 ```
 
 ## Filters
@@ -26,8 +25,10 @@ non-reference `CAF`; records with neither field are ignored. A tabix index
 reads only the target 3′UTR; without it the same interval is kept, but the
 ~1.5 GB file is decompressed once.
 
-FASTA inputs need `chrom`, 0-based BED `start`/`end`, and strand.
-Incomplete coordinates skip variant filtering.
+`--variants` is off by default. The UTR needs `chrom`, 0-based BED
+`start`/`end`, and strand. Incomplete coordinates skip variant filtering
+for the whole run. Site coordinates are the UTR interval plus the site
+offset.
 
 **BLAST.** `blastn -task blastn-short` against GENCODE 45 CHR transcripts
 (GRCh38.p14, 252930 sequences, all biotypes). Queries are DNA (`T`, never
@@ -36,6 +37,11 @@ floors default to 0. Self hits match gene symbols and ENST accessions with
 or without `.version`. Do not pass `-parse_seqids` to `makeblastdb`
 (GENCODE headers contain `|`).
 
+All pending sites go out in one `blastn` process, which is stopped after
+300 seconds. Use `--sites` for the sequences you intend to test. Omitting
+`--sites` searches every 40 nt window of the UTR and does not finish for
+LETM1 or NSD2 within that limit.
+
 ## RNAup
 
 Each BD is scored against a target slice with 120 nt context on each side:
@@ -43,10 +49,10 @@ Each BD is scored against a target slice with 120 nt context on each side:
 `--interaction_first --window N --temp T` (optional `--include_both`).
 
 RNAup reports 1-based local coordinates; bsst maps them to 0-based UTR
-offsets. By default the whole predicted target interaction must lie inside
-the intended window (`anchor_overlap = 1`). Off-anchor hits are dropped.
-RNAup cannot be skipped; `--skip-variants` / `--skip-blast` omit only those
-stages.
+offsets. The whole predicted target interaction must lie inside the site
+(`anchor_overlap = 1`). Off-anchor hits are dropped. This section runs
+only with `--rnaup`, and only on sites that already passed BLAST and,
+when requested, the variant filter.
 
 A long run of `(` / `)` in RNAup output is expected: the BD is the reverse
 complement of the window, so the MFE is usually a ~40 bp intermolecular
@@ -61,22 +67,28 @@ Every invocation writes `runs/<UTC timestamp>_<run id>/`:
 | `manifest.json` | status, parameters, input SHA-256, tool versions, databases |
 | `run.log` | stages plus full external commands, stdout, stderr |
 | `inputs/target.fasta` | exact analyzed sequence |
-| `all_candidates.tsv` | every window and `failure_reason` |
-| `candidates.tsv` | anchored eligible BDs, deterministic rank |
+| `all_candidates.tsv` | every site and `failure_reason` |
+| `candidates.tsv` | sites with `status=pass`. With `--rnaup`, only anchored sites (`status=eligible`), ordered by ΔG_total |
 | `blast_hits.tsv` | raw BLAST hits plus self/risk flags |
+
+`status=pass` is the default result. Energy columns, `interaction_*`,
+`anchor_overlap`, and `rank` are filled only when you passed `--rnaup`.
 
 | Field | Meaning |
 |-------|---------|
 | genomic `start`/`end` | 0-based half-open |
-| `interaction_target_*`, `interaction_query_*` | RNAup 1-based inclusive, local |
-| `interaction_utr_*` | mapped 0-based half-open UTR offsets |
-| energy columns | kcal/mol |
-| `bd_sequence` | DNA notation |
-| `anchor_overlap` | fraction of predicted target interaction inside the window |
+| `bd_sequence` | reverse complement of the sense site, DNA notation |
+| `interaction_target_*`, `interaction_query_*` | RNAup 1-based inclusive, local (`--rnaup` only) |
+| `interaction_utr_*` | mapped 0-based half-open UTR offsets (`--rnaup` only) |
+| energy columns | kcal/mol (`--rnaup` only) |
+| `anchor_overlap` | fraction of the predicted target interaction inside the site (`--rnaup` only) |
+| `rank` | 1 = most negative ΔG_total (`--rnaup` only) |
 
-If nothing is eligible, read `all_candidates.tsv` → `failure_reason`
-(complexity, variant overlap, BLAST, RNAup, off-anchor). Do not mix
-pre-refactor tables with current ranks.
+If `candidates.tsv` is empty, read `all_candidates.tsv` → `failure_reason`:
+`not_in_utr`, `ambiguous`, `blast_offtarget`, and with `--variants`
+`variant_overlap`. With `--rnaup`, a site that passed BLAST can still fail
+as `off_anchor_interaction` or `RNAup_*`. Do not pool these tables with
+runs from before the filter refactor.
 
 Pinned files: [resources.md](resources.md).
 What the scores are not: [limitations.md](limitations.md).

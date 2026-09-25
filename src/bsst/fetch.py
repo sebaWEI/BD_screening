@@ -39,7 +39,7 @@ def _ensembl_get(path: str, *, content_type: str, params: dict[str, str] | None 
             sleep(0.5 * (2 ** attempt))
     raise EnsemblArchiveError(
         f"Ensembl REST archive {ENSEMBL_REST['base_url']} request failed for {path}. "
-        "Use `bsst run fasta` with a stored 3'UTR. "
+        "Pass `--utr` with a stored 3'UTR. "
         "bsst does not fall back to rest.ensembl.org."
     ) from last_exc
 
@@ -59,7 +59,7 @@ def assert_ensembl_111() -> str:
         raise EnsemblArchiveError(
             f"{ENSEMBL_REST['base_url']} reported Ensembl release {release}, "
             f"expected {expected} (GENCODE {ENSEMBL_REST['gencode_release']}). "
-            "Use `bsst run fasta`."
+            "Pass `--utr` with a stored 3'UTR."
         )
     _cached_release = release
     return release

@@ -42,33 +42,11 @@ def test_check_requirements_ok_with_required_binaries(tmp_path: Path, monkeypatc
     assert "missing/optional" in checked.stdout
 
 
-def test_small_run_with_mock_rnaup(tmp_path: Path, monkeypatch) -> None:
-    executable = tmp_path / "RNAup"
-    executable.write_text(
-        "#!/bin/sh\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'RNAup mock 1'; exit 0; fi\n"
-        "printf '>target\\n>query\\n.  1,40 : 1,40  (-10 = -15 + 3 + 2)\\n'\n"
-    )
-    executable.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{tmp_path}")
-    fasta = tmp_path / "target.fa"
-    fasta.write_text(">target\nACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT\n")
-    runs = tmp_path / "runs"
-    result = runner.invoke(
-        app,
-        [
-            "run", "fasta", str(fasta), "--runs-dir", str(runs),
-            "--skip-blast", "--skip-variants", "--window-size", "40",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    run_dir = next(runs.iterdir())
-    for name in (
-        "run.log", "manifest.json", "inputs/target.fasta",
-        "all_candidates.tsv", "candidates.tsv", "blast_hits.tsv",
-    ):
-        assert (run_dir / name).exists()
-    assert json.loads((run_dir / "manifest.json").read_text())["status"] == "completed"
-    all_candidates = (run_dir / "all_candidates.tsv").read_text()
-    assert "anchor_overlap" in all_candidates
-    assert "eligible" in all_candidates
+def test_filter_help_requires_gene() -> None:
+    result = runner.invoke(app, ["filter", "--help"])
+    assert result.exit_code == 0
+    assert "--gene" in result.stdout
+    assert "--sites" in result.stdout
+    assert "--rnaup" in result.stdout
+    missing = runner.invoke(app, ["filter", "--utr", "examples/LETM1.fasta"])
+    assert missing.exit_code != 0

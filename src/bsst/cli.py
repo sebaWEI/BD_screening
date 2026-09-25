@@ -22,14 +22,10 @@ from .resources import (
     discover_variant_vcf,
 )
 
-app = typer.Typer(help="bsst: Binding Site Selection Tool for Hepha antisense domains. Primary input is FASTA.")
+app = typer.Typer(help="bsst: BLAST filter for Hepha antisense sites. RNAup ranking is off unless --rnaup.")
 db_app = typer.Typer(help="Manage local database configuration.")
-run_app = typer.Typer(
-    help="Run site ranking. Prefer `run fasta`; `run gene` fetches Ensembl 111 as a convenience."
-)
 config_app = typer.Typer(help="Inspect configuration.")
 app.add_typer(db_app, name="db")
-app.add_typer(run_app, name="run")
 app.add_typer(config_app, name="config")
 console = Console()
 
@@ -116,9 +112,10 @@ def check_requirements() -> None:
     for row in report:
         table.add_row(row["resource"], row["value"], row["status"])
     console.print(table)
-    console.print("A full local run needs RNAup, blastn, makeblastdb, blast_db, and variant_vcf all `ok`.")
+    console.print("A BLAST filter needs blastn, makeblastdb, and blast_db `ok`.")
+    console.print("RNAup is optional and used only with `bsst filter --rnaup`.")
+    console.print("variant_vcf is optional and used only with `bsst filter --variants`.")
     console.print("tabix is optional but recommended for large VCF region queries.")
-    console.print("Use --skip-blast and/or --skip-variants only when you intentionally omit those stages.")
     failed = [row for row in report if row["status"] in {"missing", "mismatch"}]
     if failed:
         names = ", ".join(row["resource"] for row in failed)
@@ -129,7 +126,7 @@ def check_requirements() -> None:
         console.print(
             "[yellow]Optional items still missing: "
             + ", ".join(optional_missing)
-            + ". `bsst run` will skip those stages unless you finish `db init`.[/yellow]"
+            + ". Finish `db init` before `bsst filter`, or pass `--variants` / `--rnaup` only when those tools are present.[/yellow]"
         )
 
 
@@ -182,88 +179,14 @@ def _options(
     )
 
 
-def _run(
-    target: Target,
-    runs_dir: Path | None,
-    variant_vcf: Path | None,
-    blast_db: str | None,
-    skip_variants: bool,
-    skip_blast: bool,
-    options: SelectOptions,
-) -> None:
-    cfg = load_config()
-    resolved_vcf = variant_vcf or (
-        Path(cfg["variant_vcf"]) if cfg.get("variant_vcf") else discover_variant_vcf()
-    )
-    resolved_blast = blast_db or cfg.get("blast_db") or discover_blast_db()
-    run_dir = select(
-        target,
-        options,
-        runs_dir=runs_dir or Path(cfg["runs_dir"]),
-        variant_vcf=resolved_vcf,
-        blast_db=resolved_blast,
-        skip_variants=skip_variants,
-        skip_blast=skip_blast,
-        self_tokens=[token for token in (target.gene, target.transcript_id) if token],
-    )
-    console.print(f"Run completed: {run_dir}")
-
-
-@run_app.command("gene")
-def run_gene(
-    gene: str = typer.Argument(..., help="Gene symbol looked up on Ensembl REST archive 111."),
-    runs_dir: Path | None = typer.Option(None, help="Override configured runs directory."),
-    species: str = typer.Option("homo_sapiens"),
-    variant_vcf: Path | None = typer.Option(None, "--variant-vcf"),
-    blast_db: str | None = typer.Option(None),
-    skip_variants: bool = typer.Option(False),
-    skip_blast: bool = typer.Option(False),
-    window_size: int = typer.Option(40),
-    step: int = typer.Option(1),
-    context: int = typer.Option(120),
-    temperature: float = typer.Option(37.0),
-    include_both: bool = typer.Option(False),
-    min_anchor_overlap: float = typer.Option(1.0),
-    min_af: float | None = typer.Option(
-        None, min=0.0, max=1.0, help="Only filter variants with AF at least this value."
-    ),
-) -> None:
-    try:
-        target = fetch_gene_utr(gene, species)
-    except EnsemblArchiveError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1) from exc
-    _run(
-        target, runs_dir, variant_vcf, blast_db, skip_variants, skip_blast,
-        _options(window_size, step, context, temperature, include_both, min_anchor_overlap, min_af),
-    )
-
-
-@run_app.command("fasta")
-def run_fasta(
-    fasta: Path = typer.Argument(..., exists=True, readable=True),
-    runs_dir: Path | None = typer.Option(None, help="Override configured runs directory."),
-    chrom: str | None = typer.Option(None),
-    start: int | None = typer.Option(None, help="0-based BED start."),
-    end: int | None = typer.Option(None, help="0-based BED end."),
-    strand: str | None = typer.Option(
-        None, help="+ or -; inferred from a compatible header, otherwise +."
-    ),
-    gene: str | None = typer.Option(None),
-    variant_vcf: Path | None = typer.Option(None, "--variant-vcf"),
-    blast_db: str | None = typer.Option(None),
-    skip_variants: bool = typer.Option(False),
-    skip_blast: bool = typer.Option(False),
-    window_size: int = typer.Option(40),
-    step: int = typer.Option(1),
-    context: int = typer.Option(120),
-    temperature: float = typer.Option(37.0),
-    include_both: bool = typer.Option(False),
-    min_anchor_overlap: float = typer.Option(1.0),
-    min_af: float | None = typer.Option(
-        None, min=0.0, max=1.0, help="Only filter variants with AF at least this value."
-    ),
-) -> None:
+def _load_utr(
+    fasta: Path,
+    gene: str,
+    chrom: str | None,
+    start: int | None,
+    end: int | None,
+    strand: str | None,
+) -> Target:
     if strand is not None and strand not in {"+", "-"}:
         raise typer.BadParameter("strand must be + or -")
     record = SeqIO.read(fasta, "fasta")
@@ -283,19 +206,79 @@ def run_fasta(
         r"([A-Za-z0-9.-]+)_(ENST[0-9]+(?:\.[0-9]+)?)", record.id
     )
     if name_match:
-        gene = gene or name_match.group(1)
         transcript_id = name_match.group(2)
-    target = Target(
+    return Target(
         sequence=str(record.seq).upper(), name=record.id, chrom=chrom,
         start=start, end=end, strand=strand, gene=gene,
         transcript_id=transcript_id, source=f"FASTA: {fasta}",
     )
-    if variant_vcf and (chrom is None or start is None or end is None):
-        console.print("[yellow]Warning: no complete coordinates; variant filtering will be skipped.[/yellow]")
-    _run(
-        target, runs_dir, variant_vcf, blast_db, skip_variants, skip_blast,
-        _options(window_size, step, context, temperature, include_both, min_anchor_overlap, min_af),
+
+
+def _load_sites(fasta: Path) -> list[tuple[str, str]]:
+    sites = [(record.id, str(record.seq)) for record in SeqIO.parse(fasta, "fasta")]
+    if not sites:
+        raise typer.BadParameter("sites FASTA has no records")
+    return sites
+
+
+@app.command("filter")
+def filter_sites(
+    gene: str = typer.Option(..., "--gene", help="Gene symbol used to ignore self BLAST hits."),
+    utr: Path | None = typer.Option(
+        None, "--utr", exists=True, readable=True,
+        help="3'UTR FASTA. Omitted sequences are fetched from Ensembl 111.",
+    ),
+    sites: Path | None = typer.Option(
+        None, "--sites", exists=True, readable=True,
+        help="Sense binding sites. Omitted sites are 40 nt windows stepped by 1.",
+    ),
+    runs_dir: Path | None = typer.Option(None, help="Override configured runs directory."),
+    species: str = typer.Option("homo_sapiens"),
+    chrom: str | None = typer.Option(None),
+    start: int | None = typer.Option(None, help="0-based BED start of the UTR."),
+    end: int | None = typer.Option(None, help="0-based BED end of the UTR."),
+    strand: str | None = typer.Option(None, help="+ or -; inferred from a compatible UTR header, otherwise +."),
+    variant_vcf: Path | None = typer.Option(None, "--variant-vcf"),
+    blast_db: str | None = typer.Option(None),
+    variants: bool = typer.Option(False, "--variants", help="Drop sites overlapping dbSNP common_all."),
+    rnaup: bool = typer.Option(False, "--rnaup", help="Score sites that passed the filter and rank by ΔG."),
+    window_size: int = typer.Option(40),
+    step: int = typer.Option(1),
+    context: int = typer.Option(120),
+    temperature: float = typer.Option(37.0),
+    include_both: bool = typer.Option(False),
+    min_anchor_overlap: float = typer.Option(1.0),
+    min_af: float | None = typer.Option(
+        None, min=0.0, max=1.0, help="With --variants, ignore variants below this frequency."
+    ),
+) -> None:
+    if utr is None:
+        try:
+            target = fetch_gene_utr(gene, species)
+        except EnsemblArchiveError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from exc
+    else:
+        target = _load_utr(utr, gene, chrom, start, end, strand)
+    if variants and (target.chrom is None or target.start is None or target.end is None):
+        console.print("[yellow]Warning: UTR has no complete coordinates; variant filtering will be skipped.[/yellow]")
+    cfg = load_config()
+    resolved_vcf = variant_vcf or (
+        Path(cfg["variant_vcf"]) if cfg.get("variant_vcf") else discover_variant_vcf()
     )
+    resolved_blast = blast_db or cfg.get("blast_db") or discover_blast_db()
+    run_dir = select(
+        target,
+        _options(window_size, step, context, temperature, include_both, min_anchor_overlap, min_af),
+        runs_dir=runs_dir or Path(cfg["runs_dir"]),
+        variant_vcf=resolved_vcf,
+        blast_db=resolved_blast,
+        sites=_load_sites(sites) if sites else None,
+        use_variants=variants,
+        use_rnaup=rnaup,
+        self_tokens=[token for token in (gene, target.transcript_id) if token],
+    )
+    console.print(f"Run completed: {run_dir}")
 
 
 if __name__ == "__main__":

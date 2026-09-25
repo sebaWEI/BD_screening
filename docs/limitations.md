@@ -1,24 +1,24 @@
 # Scientific limitations
 
-This tool ranks antisense binding domains on the **3′UTR**. That is how
-Hepha is specified. The limits below are about scoring and data, not about
-that target region.
+This tool filters sense sites on the **3′UTR**. That is how Hepha is
+specified. Passing BLAST is not proof of up-regulation. A default run
+does not score or rank sites. `--rnaup` adds a thermodynamic hypothesis
+for sites that already passed.
 
-The ranks are computational hypotheses, not proof of up-regulation.
+## What `--rnaup` still omits
 
-## What the scores omit
-
-RNAup is a thermodynamic RNA–RNA model. It does not know about:
+RNAup is off unless you pass `--rnaup`. It is a thermodynamic RNA–RNA
+model, and it does not know about:
 
 - protein occupancy or RBP maps
 - cellular compartment, modifications, or degradation
 - isoform abundance or construct context
 - genome (DNA) off-targets — BLAST here is against **transcripts**
 
-BLAST and variant filters depend on the pinned files and the flags you
-pass (`--min-af`, `--skip-blast`, `--skip-variants`).
+BLAST always uses the pinned transcriptome. The variant filter runs only
+with `--variants` (and optional `--min-af`).
 
-**`run fasta`** is the reproducible path. **`run gene`** always takes the
+**`--utr`** is the reproducible path. Omitting it always takes the
 Ensembl 111 archive’s canonical coding transcript, which may not be the
 isoform you want, and the archive will eventually retire.
 
@@ -28,14 +28,15 @@ isoform you want, and the archive will eventually retire.
 |----------|---------------------|
 | BLAST subject | GENCODE 45 / Ensembl 111 / GRCh38.**p14** / all CHR transcripts |
 | Variant VCF | NCBI dbSNP b151 `common_all` / GRCh38.**p7** |
-| `run gene` | Ensembl REST **archive 111** only (`e111.rest.ensembl.org`) |
+| omitted `--utr` | Ensembl REST **archive 111** only (`e111.rest.ensembl.org`) |
 
 Catalog and verification: [resources.md](resources.md).
 
-## After ranking
+## After filtering
 
-Review candidates, then test in the lab: negative controls, dose response,
-RNA and protein readouts, and replication. Old result files used a
-different model; do not pool them with current ranks.
+Review sites that passed, then test in the lab: negative controls, dose
+response, RNA and protein readouts, and replication. A ΔG rank from
+`--rnaup` is not a substitute for that. Old result files ranked every
+window by RNAup; do not pool them with current pass/fail tables.
 
 Tool and database citations: [methods.md](methods.md#references).

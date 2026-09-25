@@ -19,7 +19,7 @@ The pipeline records each producer string separately.
 | Example NSD2   | `examples/NSD2.FASTA`                   | ENST00000508803 (v45 NSD2-218 `.6`)    | chrom=4 BED |
 
 
-`run fasta` is the durable path. `run gene` talks only to the Ensembl 111
+`--utr` is the durable path. Omitting it talks only to the Ensembl 111
 archive. The bundled FASTAs match that archive’s canonical 3′UTRs for
 those BED intervals; minus-strand LETM1 windows equal the reverse
 complement of the plus-strand genome slice.

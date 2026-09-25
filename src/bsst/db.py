@@ -243,7 +243,6 @@ def tool_report() -> list[dict[str, str]]:
             "RNAup",
             resolve_executable("RNAup"),
             bool(resolve_executable("RNAup")),
-            required=True,
         ),
         _row(
             "blastn",
