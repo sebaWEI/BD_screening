@@ -40,7 +40,7 @@ BLAST_COLUMNS = [
 def resolve_executable(name: str, explicit: str | None = None) -> str | None:
     if explicit:
         return explicit
-    env_value = os.environ.get(f"BSST_{name.upper()}")
+    env_value = os.environ.get(f"BSSF_{name.upper()}")
     configured = load_config().get(f"{name.lower()}_exe")
     candidates = [
         env_value,
@@ -156,13 +156,28 @@ def _chrom(value: str) -> str:
     return normalized[3:] if normalized.startswith("chr") else normalized
 
 
+def _freq_field_max_alt(freq: str) -> float | None:
+    """Max alternate frequency across dbSNP ``FREQ=study:ref,alt,…|…`` blocks."""
+    best: float | None = None
+    for block in freq.split("|"):
+        if ":" not in block:
+            continue
+        _, values = block.split(":", 1)
+        nums = [float(x) for x in values.split(",") if x not in {"", "."}]
+        if len(nums) < 2:
+            continue
+        alt = max(nums[1:])
+        best = alt if best is None else max(best, alt)
+    return best
+
+
 def _info_allele_frequency(info: dict[str, str]) -> float | None:
     """Return a scalar frequency for filtering, or None if none is declared.
 
     Preference order:
     1. VCF ``AF`` (alternate-allele frequencies)
-    2. dbSNP ``CAF`` (1000 Genomes counts; first value is the reference allele,
-       remaining values are alternates in ALT order)
+    2. dbSNP ``CAF`` (first value reference, then alternates)
+    3. dbSNP ``FREQ`` (per-study ref,alt,… lists)
     """
     af_values = [
         float(x) for x in info.get("AF", "").split(",")
@@ -176,16 +191,29 @@ def _info_allele_frequency(info: dict[str, str]) -> float | None:
     ]
     if len(caf_values) >= 2:
         return max(caf_values[1:])
+    if info.get("FREQ"):
+        return _freq_field_max_alt(info["FREQ"])
     return None
 
 
+def _info_has_common(info: str) -> bool:
+    return any(part == "COMMON" or part.startswith("COMMON=") for part in info.split(";"))
+
+
 def _parse_vcf_record(
-    line: str, min_af: float | None
+    line: str,
+    min_af: float | None,
+    *,
+    common_only: bool = False,
 ) -> tuple[str, int, int, float | None] | None:
+    from .resources import refseq_to_chrom
+
     if not line.strip() or line.startswith("#"):
         return None
     fields = line.rstrip().split("\t")
     if len(fields) < 8:
+        return None
+    if common_only and not _info_has_common(fields[7]):
         return None
     pos0 = int(fields[1]) - 1
     ref = fields[3]
@@ -196,7 +224,8 @@ def _parse_vcf_record(
     af = _info_allele_frequency(info)
     if min_af is not None and (af is None or af < min_af):
         return None
-    return (_chrom(fields[0]), pos0, pos0 + max(1, len(ref)), af)
+    chrom = refseq_to_chrom(fields[0])
+    return (_chrom(chrom), pos0, pos0 + max(1, len(ref)), af)
 
 
 def _record_in_region(
@@ -214,49 +243,100 @@ def _record_in_region(
     return start < record[2] and record[1] < end
 
 
-def _tabix_vcf_lines(path: Path, chrom: str, start: int, end: int) -> list[str] | None:
-    index = Path(str(path) + ".tbi")
-    if not index.is_file():
-        return None
+def _is_http_source(source: str | Path) -> bool:
+    return str(source).startswith(("http://", "https://"))
+
+
+def _tabix_query_contig(chrom: str, *, gcf: bool) -> str:
+    """Contig ID to pass to tabix (RefSeq for GCF, else normalized chrom)."""
+    if gcf:
+        from .resources import chrom_to_refseq
+
+        return chrom_to_refseq(chrom) or _chrom(chrom)
+    return _chrom(chrom)
+
+
+def _tabix_vcf_lines(
+    source: str | Path, chrom: str, start: int, end: int, *, gcf: bool = False
+) -> list[str] | None:
     tabix = shutil.which("tabix")
     if not tabix:
         return None
-    region = f"{_chrom(chrom)}:{start + 1}-{end}"
+    source_s = str(source)
+    if not _is_http_source(source_s):
+        index = Path(source_s + ".tbi")
+        if not index.is_file():
+            return None
+    contig = _tabix_query_contig(chrom, gcf=gcf)
+    region = f"{contig}:{start + 1}-{end}"
     proc = subprocess.run(
-        [tabix, str(path), region], capture_output=True, text=True, timeout=60
+        [tabix, source_s, region],
+        capture_output=True,
+        text=True,
+        timeout=180,
     )
     if proc.returncode != 0:
         return None
     return [line for line in proc.stdout.splitlines() if line.strip()]
 
 
+def _looks_like_gcf_dbsnp(source: str | Path) -> bool:
+    name = str(source)
+    return "GCF_000001405.40" in name or name.endswith("GCF_000001405.40.gz")
+
+
 def read_variant_vcf(
-    path: Path,
+    path: str | Path,
     min_af: float | None = None,
     *,
     chrom: str | None = None,
     start: int | None = None,
     end: int | None = None,
+    common_only: bool | None = None,
 ) -> list[tuple[str, int, int, float | None]]:
-    if path.suffix not in {".vcf", ".gz"} or (
-        path.suffix == ".gz" and not path.name.endswith(".vcf.gz")
-    ):
-        raise ValueError("variant file must end in .vcf or .vcf.gz")
+    """Read variants from a local VCF(.gz) or an HTTPS bgzip VCF via tabix.
+
+    For the pinned NCBI GCF dbSNP release, ``common_only`` defaults to True and
+    a genomic region is required (full-file scans of ~28 GB are not supported).
+    """
+    source = str(path)
+    gcf = _looks_like_gcf_dbsnp(source)
+    if common_only is None:
+        common_only = gcf
+    if gcf and (chrom is None or start is None or end is None):
+        raise ValueError("GCF dbSNP queries require chrom/start/end (tabix region)")
+    if not _is_http_source(source):
+        path_obj = Path(source)
+        if path_obj.suffix not in {".vcf", ".gz"} or (
+            path_obj.suffix == ".gz" and not path_obj.name.endswith((".vcf.gz", ".40.gz"))
+        ):
+            # Allow GCF_000001405.40.gz (no .vcf in the name).
+            if not path_obj.name.endswith(".gz") and path_obj.suffix != ".vcf":
+                raise ValueError("variant file must end in .vcf or .vcf.gz")
     region = chrom is not None and start is not None and end is not None
     if region:
-        tabix_lines = _tabix_vcf_lines(path, chrom, start, end)
+        tabix_lines = _tabix_vcf_lines(source, chrom, start, end, gcf=gcf)
         if tabix_lines is not None:
             records = []
             for line in tabix_lines:
-                parsed = _parse_vcf_record(line, min_af)
+                parsed = _parse_vcf_record(line, min_af, common_only=common_only)
                 if parsed and _record_in_region(parsed, chrom, start, end):
                     records.append(parsed)
             return records
-    opener = gzip.open if path.name.endswith(".gz") else open
+        if _is_http_source(source) or gcf:
+            raise RuntimeError(
+                f"tabix region query failed for {source} "
+                f"({_tabix_query_contig(chrom, gcf=gcf)}:{start + 1}-{end}); "
+                "is tabix installed and the network reachable?"
+            )
+    if _is_http_source(source):
+        raise ValueError("HTTP variant sources require chrom/start/end for tabix")
+    path_obj = Path(source)
+    opener = gzip.open if path_obj.name.endswith(".gz") else open
     variants = []
-    with opener(path, "rt", encoding="utf-8") as handle:
+    with opener(path_obj, "rt", encoding="utf-8") as handle:
         for line in handle:
-            parsed = _parse_vcf_record(line, min_af)
+            parsed = _parse_vcf_record(line, min_af, common_only=common_only)
             if parsed and _record_in_region(parsed, chrom, start, end):
                 variants.append(parsed)
     return variants
@@ -436,7 +516,7 @@ def run_blast(
         index_path = discover_utr_index()
         if index_path is None:
             raise RuntimeError(
-                "GENCODE UTR annotation is required; run `bsst db init --gencode-v45-transcripts`."
+                "GENCODE UTR annotation is required; run `bssf db init --gencode-v45-transcripts`."
             )
         utr_index = load_utr_index(index_path)
     query = "".join(
@@ -498,7 +578,7 @@ def _tool_version(exe: str | None, flag: str = "--version") -> str | None:
 
 def _package_versions() -> dict[str, str]:
     versions = {}
-    for package in ("bsst", "pandas", "biopython", "typer", "requests"):
+    for package in ("bssf", "pandas", "biopython", "typer", "requests"):
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
@@ -511,7 +591,7 @@ def select(
     options: SelectOptions | None = None,
     *,
     runs_dir: Path = Path("runs"),
-    variant_vcf: Path | None = None,
+    variant_vcf: str | Path | None = None,
     blast_db: str | None = None,
     sites: list[tuple[str, str]] | None = None,
     use_variants: bool = False,
@@ -563,7 +643,7 @@ def select(
 
         logger.info("stage=blast")
         if not blast_db:
-            raise RuntimeError("BLAST database is required; run `bsst db init`.")
+            raise RuntimeError("BLAST database is required; run `bssf db init`.")
         hits = pd.DataFrame(columns=BLAST_COLUMNS + ["is_self", "offtarget_risk"])
         if active.any():
             hits = run_blast(

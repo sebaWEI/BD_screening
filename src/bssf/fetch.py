@@ -40,7 +40,7 @@ def _ensembl_get(path: str, *, content_type: str, params: dict[str, str] | None 
     raise EnsemblArchiveError(
         f"Ensembl REST archive {ENSEMBL_REST['base_url']} request failed for {path}. "
         "Pass `--utr` with a stored 3'UTR. "
-        "bsst does not fall back to rest.ensembl.org."
+        "bssf does not fall back to rest.ensembl.org."
     ) from last_exc
 
 

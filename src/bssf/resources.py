@@ -1,4 +1,4 @@
-"""Pinned scientific resources used by bsst.
+"""Pinned scientific resources used by bssf.
 
 Names, URLs, and version strings are the identifiers assigned by the data
 producer. Do not rename a file's contents after another database.
@@ -12,40 +12,66 @@ from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------------------
-# NCBI dbSNP
-# Header inside the file: ##source=dbSNP ##dbSNP_BUILD_ID=151 ##reference=GRCh38.p7
+# NCBI dbSNP (GRCh38.p14) — tabix region queries
+#
+# NCBI no longer ships a separate common_all VCF on p14. The pinned source is
+# GCF_000001405.40 (~28 GB). bssf does **not** download that file: ``db init
+# --dbsnp-common-all`` fetches only the ~3 MB ``.tbi``, and ``--variants``
+# runs ``tabix`` over the HTTPS URL for the target UTR interval, keeping
+# INFO/COMMON records and remapping NC_* → 1..22/X/Y/MT.
 # ---------------------------------------------------------------------------
-DBSNP_B151_GRCH38P7_COMMON_ALL: dict[str, Any] = {
-    "id": "dbsnp_b151_grch38p7_common_all",
+DBSNP_B157_GRCH38P14: dict[str, Any] = {
+    "id": "dbsnp_b157_grch38p14_tabix",
     "role": "variant_vcf",
     "producer": "NCBI dbSNP",
-    "filename": "dbSNP_b151_GRCh38p7_common_all_20180418.vcf.gz",
-    "url": (
-        "https://ftp.ncbi.nih.gov/snp/organisms/human_9606_b151_GRCh38p7/"
-        "VCF/common_all_20180418.vcf.gz"
-    ),
-    "directory_url": (
-        "https://ftp.ncbi.nih.gov/snp/organisms/human_9606_b151_GRCh38p7/VCF/"
-    ),
-    "assembly": "GRCh38.p7",
+    "source_filename": "GCF_000001405.40.gz",
+    "tbi_filename": "GCF_000001405.40.gz.tbi",
+    # Prefer ftp.ncbi.nlm.nih.gov (often faster / more reachable than ftp.ncbi.nih.gov).
+    "url": "https://ftp.ncbi.nlm.nih.gov/snp/latest_release/VCF/GCF_000001405.40.gz",
+    "directory_url": "https://ftp.ncbi.nlm.nih.gov/snp/latest_release/VCF/",
+    "tbi_url": "https://ftp.ncbi.nlm.nih.gov/snp/latest_release/VCF/GCF_000001405.40.gz.tbi",
+    "url_alt": "https://ftp.ncbi.nih.gov/snp/latest_release/VCF/GCF_000001405.40.gz",
+    "assembly": "GRCh38.p14",
+    "refseq_accession": "GCF_000001405.40",
     "variant_source": "NCBI dbSNP",
-    "variant_release": "b151 fileDate=20180418 common_all",
-    "chrom_style": "unprefixed",  # 1, 2, ..., X, Y, MT — not chr1
-    "frequency_fields": ("CAF", "TOPMED"),
+    "variant_release": "b157 fileDate=20241205 tabix INFO/COMMON",
+    "chrom_style": "unprefixed",  # after remap: 1, 2, ..., X, Y, MT — not chr1
+    "source_chrom_style": "refseq",  # NC_000001.11 …
+    "frequency_fields": ("AF", "CAF", "FREQ"),
+    "common_flag": "COMMON",
+    "common_only_default": True,
     "header_checks": (
-        "##source=dbSNP",
-        "##dbSNP_BUILD_ID=151",
-        "##reference=GRCh38.p7",
-        "##fileDate=20180418",
+        "##reference=GRCh38.p14",
+        "##dbSNP_BUILD_ID=157",
     ),
-    # SHA-256 of common_all_20180418.vcf.gz. NCBI publishes MD5 only;
-    # that digest matches this file: a274dcecff9cfe6084eaef848080ad8d
-    "sha256": "a4b5ca65be831ef071891c8f6eb4925a83a1a9ecaa84a2585b0b71c7b217d564",
-    "md5": "a274dcecff9cfe6084eaef848080ad8d",
-    "md5_url": (
-        "https://ftp.ncbi.nih.gov/snp/organisms/human_9606_b151_GRCh38p7/"
-        "VCF/common_all_20180418.vcf.gz.md5"
-    ),
+    # Primary assembled molecules only (GRCh38.p14 assembly report).
+    "refseq_to_chrom": {
+        "NC_000001.11": "1",
+        "NC_000002.12": "2",
+        "NC_000003.12": "3",
+        "NC_000004.12": "4",
+        "NC_000005.10": "5",
+        "NC_000006.12": "6",
+        "NC_000007.14": "7",
+        "NC_000008.11": "8",
+        "NC_000009.12": "9",
+        "NC_000010.11": "10",
+        "NC_000011.10": "11",
+        "NC_000012.12": "12",
+        "NC_000013.11": "13",
+        "NC_000014.9": "14",
+        "NC_000015.10": "15",
+        "NC_000016.10": "16",
+        "NC_000017.11": "17",
+        "NC_000018.10": "18",
+        "NC_000019.10": "19",
+        "NC_000020.11": "20",
+        "NC_000021.9": "21",
+        "NC_000022.11": "22",
+        "NC_000023.11": "X",
+        "NC_000024.10": "Y",
+        "NC_012920.1": "MT",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -182,7 +208,7 @@ BLASTN_SHORT: dict[str, Any] = {
 EXAMPLE_LETM1: dict[str, Any] = {
     "id": "example_letm1",
     "role": "example_target",
-    "producer": "bsst examples (Ensembl-style 3′UTR FASTA)",
+    "producer": "bssf examples (Ensembl-style 3′UTR FASTA)",
     "path": "examples/LETM1.fasta",
     "gene": "LETM1",
     "transcript_id": "ENST00000302787",
@@ -200,7 +226,7 @@ EXAMPLE_LETM1: dict[str, Any] = {
 EXAMPLE_NSD2: dict[str, Any] = {
     "id": "example_nsd2",
     "role": "example_target",
-    "producer": "bsst examples (Ensembl-style 3′UTR FASTA)",
+    "producer": "bssf examples (Ensembl-style 3′UTR FASTA)",
     "path": "examples/NSD2.fasta",
     "gene": "NSD2",
     "transcript_id": "ENST00000508803",
@@ -218,7 +244,7 @@ EXAMPLE_NSD2: dict[str, Any] = {
 
 def catalog() -> tuple[dict[str, Any], ...]:
     return (
-        DBSNP_B151_GRCH38P7_COMMON_ALL,
+        DBSNP_B157_GRCH38P14,
         GENCODE_V45_TRANSCRIPTS,
         GENCODE_V45_ANNOTATION,
         ENSEMBL_REST,
@@ -232,7 +258,7 @@ def package_root() -> Path:
     """Repository root in an editable src/ layout; otherwise CWD."""
     here = Path(__file__).resolve()
     repo = here.parents[2]
-    if (repo / "pyproject.toml").is_file() and (repo / "src" / "bsst").is_dir():
+    if (repo / "pyproject.toml").is_file() and (repo / "src" / "bssf").is_dir():
         return repo
     return Path.cwd()
 
@@ -241,8 +267,30 @@ def data_dir() -> Path:
     return package_root() / "data"
 
 
-def bundled_dbsnp_vcf() -> Path:
-    return data_dir() / DBSNP_B151_GRCH38P7_COMMON_ALL["filename"]
+def bundled_dbsnp_source() -> Path:
+    return data_dir() / DBSNP_B157_GRCH38P14["source_filename"]
+
+
+def bundled_dbsnp_tbi() -> Path:
+    return data_dir() / DBSNP_B157_GRCH38P14["tbi_filename"]
+
+
+def chrom_to_refseq(chrom: str) -> str | None:
+    """Map unprefixed / chr-prefixed names to GCF RefSeq contig IDs."""
+    key = str(chrom).strip()
+    if key.lower().startswith("chr"):
+        key = key[3:]
+    upper = key.upper()
+    if upper == "M":
+        upper = "MT"
+    for contig, name in DBSNP_B157_GRCH38P14["refseq_to_chrom"].items():
+        if name.upper() == upper:
+            return contig
+    return None
+
+
+def refseq_to_chrom(contig: str) -> str:
+    return DBSNP_B157_GRCH38P14["refseq_to_chrom"].get(contig, contig)
 
 
 def bundled_gencode_fasta() -> Path:
@@ -271,9 +319,11 @@ def blast_db_is_present(prefix: str | Path) -> bool:
     return path.with_suffix(".nhr").is_file() or path.with_suffix(".nin").is_file()
 
 
-def discover_variant_vcf() -> Path | None:
-    path = bundled_dbsnp_vcf()
-    return path if path.is_file() else None
+def discover_variant_vcf() -> str | None:
+    """Pinned HTTPS GCF URL once the local ``.tbi`` has been fetched."""
+    if bundled_dbsnp_tbi().is_file():
+        return DBSNP_B157_GRCH38P14["url"]
+    return None
 
 
 def discover_blast_db() -> str | None:
@@ -281,32 +331,42 @@ def discover_blast_db() -> str | None:
     return str(prefix) if blast_db_is_present(prefix) else None
 
 
-def tabix_index_path(vcf: Path) -> Path:
+def tabix_index_path(vcf: Path | str) -> Path:
     return Path(str(vcf) + ".tbi")
 
 
-def verify_dbsnp_vcf(path: Path) -> tuple[bool, str]:
-    """Check producer header fields inside the VCF, not the file name."""
-    opener = gzip.open if path.name.endswith(".gz") else open
-    headers: list[str] = []
+def verify_dbsnp_tabix(source: str | Path) -> tuple[bool, str]:
+    """Confirm tabix can read the pinned GRCh38.p14 / b157 header."""
+    import shutil
+    import subprocess
+
+    tabix = shutil.which("tabix")
+    if not tabix:
+        return False, "tabix not on PATH"
     try:
-        with opener(path, "rt", encoding="utf-8") as handle:
-            for line in handle:
-                if not line.startswith("#"):
-                    break
-                headers.append(line.rstrip("\n"))
-                if len(headers) >= 40:
-                    break
-    except OSError as exc:
+        proc = subprocess.run(
+            [tabix, "-H", str(source)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
         return False, str(exc)
-    text = "\n".join(headers)
+    if proc.returncode != 0:
+        return False, (proc.stderr or proc.stdout or "tabix -H failed").strip()[:200]
+    text = proc.stdout
     missing = [
-        field for field in DBSNP_B151_GRCH38P7_COMMON_ALL["header_checks"]
+        field for field in DBSNP_B157_GRCH38P14["header_checks"]
         if field not in text
     ]
     if missing:
         return False, "missing " + ", ".join(missing)
-    return True, "dbSNP b151 GRCh38.p7 common_all"
+    return True, "dbSNP b157 GRCh38.p14 tabix"
+
+
+# Back-compat alias used by older call sites.
+def verify_dbsnp_vcf(path: Path | str) -> tuple[bool, str]:
+    return verify_dbsnp_tabix(path)
 
 
 def verify_gencode_fasta(path: Path) -> tuple[bool, str]:

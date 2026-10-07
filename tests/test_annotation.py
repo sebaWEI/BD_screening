@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from bsst.annotation import build_utr_index, utr_regions, write_utr_index, load_utr_index
+from bssf.annotation import build_utr_index, utr_regions, write_utr_index, load_utr_index
 
 
 def _gff3(tmp_path: Path) -> Path:

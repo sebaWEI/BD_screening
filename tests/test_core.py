@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from bsst.models import Target
-from bsst.db import download_file
-from bsst.pipeline import (
+from bssf.models import Target
+from bssf.db import download_file
+from bssf.pipeline import (
     blast_hit_is_risk,
     blast_hit_is_self,
     complexity_failure,
@@ -40,11 +40,30 @@ def test_vcf_coordinates_chrom_and_af(tmp_path: Path) -> None:
         "chr1\t11\t.\tA\tG\t.\t.\tAF=0.05\n"
         "1\t20\t.\tAT\tA\t.\t.\tAF=0.001\n"
         "4\t30\t.\tC\tT\t.\t.\tCAF=0.90,0.10;COMMON=1\n"
+        "5\t40\t.\tG\tA\t.\t.\tFREQ=KOREAN:0.99,0.01|dbGaP_PopFreq:1,0;COMMON\n"
     )
     variants = read_variant_vcf(vcf, min_af=0.01)
-    assert variants == [("1", 10, 11, 0.05), ("4", 29, 30, 0.10)]
+    assert variants == [
+        ("1", 10, 11, 0.05),
+        ("4", 29, 30, 0.10),
+        ("5", 39, 40, 0.01),
+    ]
     assert variant_overlaps("1", 10, 11, variants)
     assert not variant_overlaps("chr1", 11, 12, variants)
+
+
+def test_parse_refseq_common_via_local_scan(tmp_path: Path) -> None:
+    vcf = tmp_path / "tiny.vcf"
+    vcf.write_text(
+        "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+        "NC_000001.11\t100\trs1\tA\tG\t.\t.\tRS=1;COMMON\n"
+        "NC_000001.11\t200\trs2\tC\tT\t.\t.\tRS=2\n"
+        "NC_012920.1\t400\trs4\tA\tC\t.\t.\tRS=4;FREQ=x:0.9,0.1;COMMON\n"
+    )
+    all_sites = read_variant_vcf(vcf, common_only=False)
+    assert ("1", 99, 100, None) in all_sites
+    common = read_variant_vcf(vcf, common_only=True)
+    assert common == [("1", 99, 100, None), ("mt", 399, 400, 0.1)]
 
 
 def test_vcf_region_keeps_only_overlapping_chrom(tmp_path: Path) -> None:

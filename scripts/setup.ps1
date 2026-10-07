@@ -1,4 +1,4 @@
-# Install bsst dependencies, download pinned databases, then check_requirements.
+# Install bssf dependencies, download pinned databases, then check_requirements.
 # Run from anywhere: .\scripts\setup.ps1
 $ErrorActionPreference = "Stop"
 
@@ -6,7 +6,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
 if (-not (Test-Path "pyproject.toml")) {
-    Write-Error "Run this script from a bsst checkout (missing pyproject.toml)."
+    Write-Error "Run this script from a bssf checkout (missing pyproject.toml)."
 }
 
 function Refresh-Path {
@@ -50,11 +50,25 @@ Re-run .\scripts\setup.ps1 with that environment activated.
 "@
 }
 
-Write-Host "==> Databases (~2 GB) and BLAST index"
-uv run bsst db init --dbsnp-common-all --gencode-v45-transcripts
+Write-Host "==> Databases (GENCODE ~1 GB; dbSNP tabix index ~3 MB) and BLAST index"
+if (-not $env:https_proxy -and -not $env:HTTPS_PROXY) {
+    try {
+        $tcp = New-Object System.Net.Sockets.TcpClient
+        $iar = $tcp.BeginConnect("127.0.0.1", 7897, $null, $null)
+        if ($iar.AsyncWaitHandle.WaitOne(500) -and $tcp.Connected) {
+            $env:http_proxy = "http://127.0.0.1:7897"
+            $env:https_proxy = "http://127.0.0.1:7897"
+            $env:HTTP_PROXY = $env:http_proxy
+            $env:HTTPS_PROXY = $env:https_proxy
+            Write-Host "    Using local proxy http://127.0.0.1:7897"
+        }
+        $tcp.Close()
+    } catch {}
+}
+uv run bssf db init --dbsnp-common-all --gencode-v45-transcripts
 
 Write-Host "==> check_requirements"
-uv run bsst check_requirements
+uv run bssf check_requirements
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install bsst dependencies, download pinned databases, then check_requirements.
+# Install bssf dependencies, download pinned databases, then check_requirements.
 # Run from anywhere: ./scripts/setup.sh
 set -euo pipefail
 
@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 if [[ ! -f pyproject.toml ]]; then
-  echo "Run this script from a bsst checkout (missing pyproject.toml)." >&2
+  echo "Run this script from a bssf checkout (missing pyproject.toml)." >&2
   exit 1
 fi
 
@@ -54,9 +54,17 @@ EOF
   exit 1
 fi
 
-echo "==> Databases (~2 GB) and BLAST index"
-uv run bsst db init --dbsnp-common-all --gencode-v45-transcripts
+echo "==> Databases (GENCODE ~1 GB; dbSNP tabix index ~3 MB) and BLAST index"
+# Proxy helps NCBI HTTPS tabix / index fetch from CN networks.
+if [[ -z "${https_proxy:-}${HTTPS_PROXY:-}" ]] && nc -z -G 1 127.0.0.1 7897 2>/dev/null; then
+  export http_proxy=http://127.0.0.1:7897
+  export https_proxy=http://127.0.0.1:7897
+  export HTTP_PROXY="$http_proxy"
+  export HTTPS_PROXY="$https_proxy"
+  echo "    Using local proxy http://127.0.0.1:7897"
+fi
+uv run bssf db init --dbsnp-common-all --gencode-v45-transcripts
 
 echo "==> check_requirements"
-uv run bsst check_requirements
+uv run bssf check_requirements
 echo "Requirements passed. Continue with the Usage section of README.md."

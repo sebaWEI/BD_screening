@@ -15,14 +15,16 @@ from .fetch import EnsemblArchiveError, fetch_gene_utr
 from .models import SelectOptions, Target
 from .pipeline import select
 from .resources import (
-    DBSNP_B151_GRCH38P7_COMMON_ALL,
+    DBSNP_B157_GRCH38P14,
     GENCODE_V45_TRANSCRIPTS,
     catalog,
     discover_blast_db,
     discover_variant_vcf,
 )
 
-app = typer.Typer(help="bsst: BLAST + optional variant filter for Hepha antisense sites.")
+app = typer.Typer(
+    help="Binding Site Safety Filter (bssf): BLAST + optional variant filter for Hepha antisense sites."
+)
 db_app = typer.Typer(help="Manage local database configuration.")
 config_app = typer.Typer(help="Inspect configuration.")
 app.add_typer(db_app, name="db")
@@ -47,7 +49,11 @@ def db_init(
         None, help="Download FASTA(.gz) and build a BLAST database."
     ),
     variant_sha256: str | None = typer.Option(
-        None, help="Expected VCF SHA-256. Defaults to the pinned digest for --dbsnp-common-all."
+        None,
+        help=(
+            "Expected SHA-256 for a custom --variant-url download. "
+            "Pinned --dbsnp-common-all verifies the NCBI source by MD5 instead."
+        ),
     ),
     transcriptome_sha256: str | None = typer.Option(
         None,
@@ -65,8 +71,9 @@ def db_init(
         False,
         "--dbsnp-common-all",
         help=(
-            "Use NCBI dbSNP b151 GRCh38.p7 common_all_20180418 "
-            f"({DBSNP_B151_GRCH38P7_COMMON_ALL['filename']})."
+            "Pin NCBI dbSNP b157 GRCh38.p14 for --variants: download the ~3 MB "
+            f"tabix index ({DBSNP_B157_GRCH38P14['tbi_filename']}) and query "
+            "INFO/COMMON sites on demand via HTTPS (no 28 GB VCF download)."
         ),
     ),
     gencode_v45_transcripts: bool = typer.Option(
@@ -113,7 +120,7 @@ def check_requirements() -> None:
         table.add_row(row["resource"], row["value"], row["status"])
     console.print(table)
     console.print("A BLAST filter needs blastn, makeblastdb, blast_db, and gencode_utr_index `ok`.")
-    console.print("variant_vcf is optional and used only with `bsst filter --variants`.")
+    console.print("variant_vcf is optional and used only with `bssf filter --variants`.")
     console.print("tabix is optional but recommended for large VCF region queries.")
     failed = [row for row in report if row["status"] in {"missing", "mismatch"}]
     if failed:
@@ -125,7 +132,7 @@ def check_requirements() -> None:
         console.print(
             "[yellow]Optional items still missing: "
             + ", ".join(optional_missing)
-            + ". Finish `db init` before `bsst filter`, or pass `--variants` only when the VCF is present.[/yellow]"
+            + ". Finish `db init` before `bssf filter`, or pass `--variants` only when the VCF is present.[/yellow]"
         )
 
 
@@ -216,9 +223,13 @@ def filter_cmd(
     start: int | None = typer.Option(None, help="0-based BED start of the UTR."),
     end: int | None = typer.Option(None, help="0-based BED end of the UTR."),
     strand: str | None = typer.Option(None, help="+ or -; inferred from a compatible UTR header, otherwise +."),
-    variant_vcf: Path | None = typer.Option(None, "--variant-vcf"),
+    variant_vcf: str | None = typer.Option(
+        None, "--variant-vcf", help="Local VCF(.gz) path or HTTPS bgzip VCF URL for tabix."
+    ),
     blast_db: str | None = typer.Option(None),
-    variants: bool = typer.Option(False, "--variants", help="Drop sites overlapping dbSNP common_all."),
+    variants: bool = typer.Option(
+        False, "--variants", help="Drop sites overlapping dbSNP COMMON (tabix region query)."
+    ),
     window_size: int = typer.Option(40),
     step: int = typer.Option(1),
     min_af: float | None = typer.Option(
@@ -240,9 +251,7 @@ def filter_cmd(
     if variants and (target.chrom is None or target.start is None or target.end is None):
         console.print("[yellow]Warning: UTR has no complete coordinates; variant filtering will be skipped.[/yellow]")
     cfg = load_config()
-    resolved_vcf = variant_vcf or (
-        Path(cfg["variant_vcf"]) if cfg.get("variant_vcf") else discover_variant_vcf()
-    )
+    resolved_vcf = variant_vcf or cfg.get("variant_vcf") or discover_variant_vcf()
     resolved_blast = blast_db or cfg.get("blast_db") or discover_blast_db()
     run_dir = select(
         target,

@@ -27,6 +27,7 @@ Thumbs.db
 # Secrets and machine-local config
 .env
 .env.*
+.bssf/
 .bsst/
 .pybiomart.sqlite
 *.sqlite

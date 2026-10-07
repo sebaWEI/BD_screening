@@ -7,7 +7,7 @@ from typing import Any
 
 
 def config_dir() -> Path:
-    return Path(os.environ.get("BSST_HOME", Path.home() / ".bsst"))
+    return Path(os.environ.get("BSSF_HOME", Path.home() / ".bssf"))
 
 
 def config_path() -> Path:

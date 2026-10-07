@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from bsst.models import Target
-from bsst.pipeline import generate_windows, readable_blast_matches, select, sites_on_utr
+from bssf.models import Target
+from bssf.pipeline import generate_windows, readable_blast_matches, select, sites_on_utr
 
 
 def _empty_blast(*_args, **_kwargs) -> pd.DataFrame:
@@ -30,9 +30,9 @@ def test_missing_and_repeated_sites_are_not_pending() -> None:
 def test_omitted_sites_slide_and_variant_stage_stays_off(tmp_path: Path, monkeypatch) -> None:
     calls = {"variants": 0}
 
-    monkeypatch.setattr("bsst.pipeline.run_blast", _empty_blast)
+    monkeypatch.setattr("bssf.pipeline.run_blast", _empty_blast)
     monkeypatch.setattr(
-        "bsst.pipeline.read_variant_vcf",
+        "bssf.pipeline.read_variant_vcf",
         lambda *_args, **_kwargs: calls.__setitem__("variants", 1),
     )
     target = Target("ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTAA", "utr", gene="GENE")
@@ -60,7 +60,7 @@ def test_blast_drop_keeps_only_passing_sites(tmp_path: Path, monkeypatch) -> Non
             "sseqid": "ENST1", "match_region": "3'UTR", "evalue": 0.5,
         }])
 
-    monkeypatch.setattr("bsst.pipeline.run_blast", blast)
+    monkeypatch.setattr("bssf.pipeline.run_blast", blast)
     target = Target("AACCGGTT", "utr", gene="GENE")
     run_dir = select(
         target,

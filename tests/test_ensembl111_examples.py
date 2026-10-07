@@ -6,17 +6,17 @@ from Bio import SeqIO
 from Bio.Seq import Seq
 import pytest
 
-from bsst.cli import _header_metadata
-from bsst.fetch import (
+from bssf.cli import _header_metadata
+from bssf.fetch import (
     EnsemblArchiveError,
     assert_ensembl_111,
     fetch_bed_sequence,
     fetch_gene_utr,
     fetch_region,
 )
-from bsst.models import Target
-from bsst.pipeline import generate_windows
-from bsst.resources import EXAMPLE_LETM1, EXAMPLE_NSD2, package_root
+from bssf.models import Target
+from bssf.pipeline import generate_windows
+from bssf.resources import EXAMPLE_LETM1, EXAMPLE_NSD2, package_root
 
 
 def _load_example(spec: dict) -> tuple[str, dict[str, str]]:

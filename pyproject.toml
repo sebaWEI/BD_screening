@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "bsst"
+name = "bssf"
 version = "0.4.0"
-description = "BD_screening: BLAST + optional variant filter for Hepha 3′UTR binding sites"
+description = "Binding Site Safety Filter (bssf): BLAST + optional variant filter for Hepha 3′UTR sites"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-bsst = "bsst.cli:app"
+bssf = "bssf.cli:app"
 
 [dependency-groups]
 dev = [
@@ -25,7 +25,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/bsst"]
+packages = ["src/bssf"]
 
 [tool.hatch.build.targets.sdist]
 include = [

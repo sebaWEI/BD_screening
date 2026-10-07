@@ -7,7 +7,7 @@ from typing import Any
 
 
 def run_logger(path: Path) -> logging.Logger:
-    logger = logging.getLogger(f"bsst.{path.parent.name}")
+    logger = logging.getLogger(f"bssf.{path.parent.name}")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")

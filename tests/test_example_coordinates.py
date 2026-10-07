@@ -2,10 +2,10 @@ from pathlib import Path
 
 from Bio import SeqIO
 
-from bsst.cli import _header_metadata
-from bsst.models import Target
-from bsst.pipeline import generate_windows
-from bsst.resources import EXAMPLE_LETM1, EXAMPLE_NSD2, package_root
+from bssf.cli import _header_metadata
+from bssf.models import Target
+from bssf.pipeline import generate_windows
+from bssf.resources import EXAMPLE_LETM1, EXAMPLE_NSD2, package_root
 
 
 def test_letm1_minus_strand_windows_match_bed_header() -> None:

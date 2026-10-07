@@ -3,7 +3,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from bsst.cli import _header_metadata, app
+from bssf.cli import _header_metadata, app
 
 runner = CliRunner()
 
@@ -15,7 +15,7 @@ def test_legacy_fasta_header_metadata() -> None:
 
 
 def test_help_check_requirements_and_config(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("BSST_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("BSSF_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("PATH", str(tmp_path))
     assert runner.invoke(app, ["--help"]).exit_code == 0
     checked = runner.invoke(app, ["check_requirements"])
@@ -36,7 +36,7 @@ def test_check_requirements_ok_with_required_binaries(tmp_path: Path, monkeypatc
         exe = tmp_path / name
         exe.write_text("#!/bin/sh\nexit 0\n")
         exe.chmod(0o755)
-    monkeypatch.setenv("BSST_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("BSSF_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("PATH", str(tmp_path))
     checked = runner.invoke(app, ["check_requirements"])
     assert checked.exit_code == 0, checked.output

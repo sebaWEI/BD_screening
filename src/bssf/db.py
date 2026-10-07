@@ -13,12 +13,12 @@ from .config import load_config, save_config
 from .pipeline import resolve_executable
 from .annotation import write_utr_index
 from .resources import (
-    DBSNP_B151_GRCH38P7_COMMON_ALL,
+    DBSNP_B157_GRCH38P14,
     GENCODE_V45_ANNOTATION,
     GENCODE_V45_TRANSCRIPTS,
     blast_db_is_present,
     bundled_blast_db_prefix,
-    bundled_dbsnp_vcf,
+    bundled_dbsnp_tbi,
     bundled_gencode_fasta,
     bundled_gencode_gff3,
     bundled_utr_index,
@@ -27,7 +27,7 @@ from .resources import (
     discover_variant_vcf,
     tabix_index_path,
     verify_blast_db,
-    verify_dbsnp_vcf,
+    verify_dbsnp_tabix,
     verify_gencode_fasta,
 )
 
@@ -49,12 +49,15 @@ def download_file(
     destination: Path,
     *,
     expected_sha256: str | None = None,
+    expected_md5: str | None = None,
     retries: int = 3,
     force: bool = False,
 ) -> Path:
-    """Stream a URL to disk with bounded retries and optional SHA-256 verification."""
+    """Stream a URL to disk with bounded retries and optional digest verification."""
     if destination.exists() and not force:
         if expected_sha256 and _sha256(destination) != expected_sha256.lower():
+            raise ValueError(f"checksum mismatch for existing file: {destination}")
+        if expected_md5 and _digest(destination, "md5") != expected_md5.lower():
             raise ValueError(f"checksum mismatch for existing file: {destination}")
         return destination
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -62,10 +65,12 @@ def download_file(
     last_error: Exception | None = None
     for attempt in range(1, retries + 1):
         try:
-            request = urllib.request.Request(url, headers={"User-Agent": "bsst/0.3"})
+            request = urllib.request.Request(url, headers={"User-Agent": "bssf/0.4"})
             with urllib.request.urlopen(request, timeout=60) as response, partial.open("wb") as out:
                 shutil.copyfileobj(response, out, length=1024 * 1024)
             if expected_sha256 and _sha256(partial) != expected_sha256.lower():
+                raise ValueError(f"checksum mismatch for downloaded file: {url}")
+            if expected_md5 and _digest(partial, "md5") != expected_md5.lower():
                 raise ValueError(f"checksum mismatch for downloaded file: {url}")
             partial.replace(destination)
             return destination
@@ -105,38 +110,42 @@ def initialize(
     directory = db_dir or Path(cfg["db_dir"])
     directory.mkdir(parents=True, exist_ok=True)
     cfg["db_dir"] = str(directory.resolve())
-    spec = DBSNP_B151_GRCH38P7_COMMON_ALL
+    spec = DBSNP_B157_GRCH38P14
     gencode = GENCODE_V45_TRANSCRIPTS
 
     if dbsnp_common_all:
         assembly = assembly or spec["assembly"]
         variant_source = variant_source or spec["variant_source"]
         variant_release = variant_release or spec["variant_release"]
-        destination = bundled_dbsnp_vcf()
-        if variant_vcf is None:
-            variant_vcf = download_file(
-                variant_url or spec["url"],
-                destination,
-                expected_sha256=variant_sha256 or spec["sha256"],
-                retries=retries,
-                force=force,
-            )
-        variant_url = None
-
-    if variant_url:
-        suffix = ".vcf.gz" if variant_url.lower().endswith(".gz") else ".vcf"
-        variant_vcf = download_file(
-            variant_url,
-            directory / f"variants{suffix}",
-            expected_sha256=variant_sha256,
+        # Only the tabix index (~3 MB). Queries hit the HTTPS GCF URL on demand.
+        download_file(
+            spec["tbi_url"],
+            bundled_dbsnp_tbi(),
             retries=retries,
             force=force,
         )
+        cfg["variant_vcf"] = variant_url or spec["url"]
+        variant_url = None
+        variant_vcf = None
+
+    if variant_url:
+        if variant_url.startswith(("http://", "https://")):
+            cfg["variant_vcf"] = variant_url
+            variant_vcf = None
+        else:
+            suffix = ".vcf.gz" if variant_url.lower().endswith(".gz") else ".vcf"
+            variant_vcf = download_file(
+                variant_url,
+                directory / f"variants{suffix}",
+                expected_sha256=variant_sha256,
+                retries=retries,
+                force=force,
+            )
     if variant_vcf:
-        if not variant_vcf.exists():
+        if not Path(variant_vcf).exists():
             raise FileNotFoundError(variant_vcf)
-        cfg["variant_vcf"] = str(variant_vcf.resolve())
-        ensure_tabix(variant_vcf)
+        cfg["variant_vcf"] = str(Path(variant_vcf).resolve())
+        ensure_tabix(Path(variant_vcf))
 
     if gencode_v45_transcripts:
         transcriptome_source = transcriptome_source or gencode["transcriptome_source"]
@@ -258,10 +267,7 @@ def _row(
 def tool_report() -> list[dict[str, str]]:
     cfg = load_config()
     blast_db = cfg.get("blast_db") or discover_blast_db()
-    variant_vcf = cfg.get("variant_vcf") or (
-        str(discover_variant_vcf()) if discover_variant_vcf() else None
-    )
-    vcf_path = Path(variant_vcf) if variant_vcf else None
+    variant_vcf = cfg.get("variant_vcf") or discover_variant_vcf()
     fasta = bundled_gencode_fasta()
     rows = [
         _row(
@@ -276,7 +282,7 @@ def tool_report() -> list[dict[str, str]]:
             bool(shutil.which("makeblastdb")),
             required=True,
         ),
-        _row("tabix", shutil.which("tabix"), bool(shutil.which("tabix"))),
+        _row("tabix", shutil.which("tabix"), bool(shutil.which("tabix")), required=False),
     ]
     blast_ok = bool(blast_db and blast_db_is_present(blast_db))
     rows.append(_row("blast_db", blast_db, blast_ok))
@@ -298,13 +304,24 @@ def tool_report() -> list[dict[str, str]]:
             _row("transcriptome_assembly", cfg.get("transcriptome_assembly"), bool(cfg.get("transcriptome_assembly"))),
         ]
     )
-    vcf_exists = bool(vcf_path and vcf_path.exists())
-    rows.append(_row("variant_vcf", variant_vcf, vcf_exists))
-    if vcf_exists and vcf_path is not None:
-        header_ok, header_detail = verify_dbsnp_vcf(vcf_path)
-        rows.append(_row("variant_vcf_identity", header_detail, header_ok, missing_ok=False))
-        tbi = tabix_index_path(vcf_path)
-        rows.append(_row("variant_tabix", tbi if tbi.is_file() else None, tbi.is_file()))
+    http = bool(variant_vcf and str(variant_vcf).startswith(("http://", "https://")))
+    local = Path(variant_vcf) if variant_vcf and not http else None
+    vcf_ok = http or bool(local and local.exists())
+    rows.append(_row("variant_vcf", variant_vcf, vcf_ok))
+    if vcf_ok and variant_vcf:
+        if shutil.which("tabix"):
+            header_ok, header_detail = verify_dbsnp_tabix(variant_vcf)
+            rows.append(
+                _row("variant_vcf_identity", header_detail, header_ok, missing_ok=False)
+            )
+        else:
+            rows.append(
+                _row("variant_vcf_identity", "tabix not on PATH", False, missing_ok=True)
+            )
+        tbi = bundled_dbsnp_tbi() if http else (tabix_index_path(local) if local else None)
+        rows.append(
+            _row("variant_tabix", tbi if tbi and tbi.is_file() else None, bool(tbi and tbi.is_file()))
+        )
     rows.extend(
         [
             _row("variant_assembly", cfg.get("assembly"), bool(cfg.get("assembly"))),

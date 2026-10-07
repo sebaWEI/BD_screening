@@ -1,13 +1,15 @@
-# BD_screening guide
+# Binding Site Safety Filter (`bssf`) guide
 
-`bsst` is a **safety filter** for Hepha antisense sites on a transcript
+`bssf` is a **safety filter** for Hepha antisense sites on a transcript
 3′UTR: drop same-strand UTR offtargets (BLAST), optionally drop common-SNP
 overlaps (`--variants`). A pass is not upregulation.
+
+Config lives under `~/.bssf` (override with `BSSF_HOME`).
 
 ```text
 3′UTR (--utr or Ensembl 111) → sites (--sites or 40 nt windows)
   → BLAST GENCODE 45 (same-strand, non-self, ≥20 nt on 5′/3′UTR → drop)
-  → optional dbSNP common_all (--variants)
+  → optional dbSNP COMMON via tabix (--variants)
   → candidates.tsv / all_binding_sites.tsv
 ```
 
@@ -31,10 +33,15 @@ UTR hits that also meet the length cutoff.
 
 ## Variants
 
-Off unless `--variants`. NCBI dbSNP b151 `common_all_20180418` on
-GRCh38.**p7** (chrom `1`, not `chr1`; freqs `CAF`/`TOPMED`). Needs UTR
-`chrom` + 0-based BED `start`/`end`. Optional `--min-af`. Tabix is
-recommended.
+Off unless `--variants`. NCBI dbSNP **b157** on **GRCh38.p14**
+(`GCF_000001405.40`). `bssf db init --dbsnp-common-all` downloads only the
+**~3 MB tabix index**; `--variants` runs `tabix` against the HTTPS VCF for
+the target UTR interval, keeps `INFO/COMMON` sites, and remaps RefSeq
+contigs (`NC_000001.11` → `1`, …). Needs UTR `chrom` + 0-based BED
+`start`/`end`. Optional `--min-af`. Requires `tabix` on `PATH` and network
+access to NCBI (a local HTTP proxy helps).
+
+(`p` in GRCh38.**p14** is the GRC **patch** level of the same major assembly.)
 
 ## Outputs (`runs/<UTC>_<id>/`)
 
@@ -51,20 +58,20 @@ a UTR match like `3'UTR of GENE (tx), 21 nt, 95% identity, …`.
 
 ## Pinned resources
 
-Identities live in `src/bsst/resources.py` (`bsst resources`,
-`bsst check_requirements`). VCF is p7; GENCODE/Ensembl 111 are p14—recorded
-separately, not interchangeable.
+Identities live in `src/bssf/resources.py` (`bssf resources`,
+`bssf check_requirements`). BLAST, UTR index, Ensembl fetch, and variants
+all pin **GRCh38.p14**.
 
 | Role | Pin |
 |------|-----|
-| Variants | dbSNP b151 `common_all_20180418`, GRCh38.p7 |
+| Variants | dbSNP b157 `GCF_000001405.40` via tabix (COMMON), GRCh38.p14 |
 | BLAST | GENCODE 45 CHR transcripts, GRCh38.p14 |
 | UTR index | same GFF3 → `gencode.v45.utr_on_transcript.tsv` |
 | Fetch | `https://e111.rest.ensembl.org` |
 | Examples | `examples/LETM1.*`, `examples/NSD2.*` |
 
 ```bash
-bsst db init --dbsnp-common-all --gencode-v45-transcripts
+bssf db init --dbsnp-common-all --gencode-v45-transcripts
 ```
 
 ## References

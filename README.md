@@ -1,7 +1,7 @@
-# BD_screening (`bsst`)
+# Binding Site Safety Filter (`bssf`)
 
-Dry-lab **binding-site safety filter** for **iGEM PekingHSC 2026**
-(HEPHA-RNA).
+Dry-lab **binding-site safety filter** (BD_screening package) for
+**iGEM PekingHSC 2026** (HEPHA-RNA).
 
 It keeps sense sites on a transcript 3′UTR whose antisense element does
 **not** have a same-strand BLAST hit in another transcript's 5′UTR or 3′UTR.
@@ -26,14 +26,14 @@ Each run writes `runs/<timestamp>_<id>/`.
    that overlaps another transcript's 5′UTR or 3′UTR. CDS-only hits stay.
    Raise the length with `--offtarget-min-length`. `--gene` is required so
    the intended gene is not called offtarget.
-4. Optionally `--variants`: drop dbSNP `common_all` overlaps.
+4. Optionally `--variants`: drop dbSNP COMMON (GRCh38.p14) overlaps.
 
 Details: [docs/guide.md](docs/guide.md).
 
 ## Setup
 
-Need Git, internet, ~3 GB disk, and 20–40 minutes the first time
-(most of that is a ~2 GB download).
+Need Git, internet, and ~1 GB free for GENCODE. Variants use a ~3 MB
+tabix index plus on-demand HTTPS queries (no 28 GB dbSNP download).
 
 ```bash
 git clone https://github.com/sebaWEI/BD_screening.git
@@ -53,8 +53,8 @@ and `gencode_utr_index`.
 
 ```bash
 source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
-bsst filter --gene LETM1 --sites examples/LETM1.sites.fasta
-bsst filter --gene LETM1 --sites examples/LETM1.sites.fasta --variants
+bssf filter --gene LETM1 --sites examples/LETM1.sites.fasta
+bssf filter --gene LETM1 --sites examples/LETM1.sites.fasta --variants
 ```
 
 Omit `--sites` and every 40 nt window goes into one `blastn` (300 s
@@ -73,16 +73,16 @@ Examples: `examples/LETM1.fasta`, `examples/NSD2.fasta`, and the matching
 
 | Command | Purpose |
 |---------|---------|
-| `bsst check_requirements` | PATH + pinned files |
-| `bsst resources` | Producer names / URLs |
-| `bsst db init --dbsnp-common-all --gencode-v45-transcripts` | Download DBs, BLAST, UTR index |
-| `bsst filter --gene SYMBOL --sites FILE` | BLAST filter |
-| `bsst filter --gene SYMBOL --sites FILE --variants` | BLAST + variants |
-| `bsst config show` | Local config |
+| `bssf check_requirements` | PATH + pinned files |
+| `bssf resources` | Producer names / URLs |
+| `bssf db init --dbsnp-common-all --gencode-v45-transcripts` | Download DBs, BLAST, UTR index |
+| `bssf filter --gene SYMBOL --sites FILE` | BLAST filter |
+| `bssf filter --gene SYMBOL --sites FILE --variants` | BLAST + variants |
+| `bssf config show` | Local config |
 
 ## If the check failed
 
-Fix the `missing` / `mismatch` row, then re-run `bsst check_requirements`.
+Fix the `missing` / `mismatch` row, then re-run `bssf check_requirements`.
 `variant_vcf` is only needed for `--variants`. `tabix` is optional.
 
 ```bash
@@ -95,5 +95,5 @@ brew install blast htslib
 # or: conda install -y -c bioconda blast htslib
 
 # databases
-bsst db init --dbsnp-common-all --gencode-v45-transcripts
+bssf db init --dbsnp-common-all --gencode-v45-transcripts
 ```
