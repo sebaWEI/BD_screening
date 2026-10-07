@@ -2,7 +2,7 @@
 
 Pinned downloads named in `src/bsst/resources.py`. Fetch and verify with
 `bsst db init --dbsnp-common-all --gencode-v45-transcripts` and
-`bsst check_requirements`. Details: [docs/resources.md](../docs/resources.md).
+`bsst check_requirements`. Details: [docs/guide.md](../docs/guide.md).
 
 | File | Producer |
 |------|----------|

@@ -28,8 +28,7 @@ Each run writes `runs/<timestamp>_<id>/`.
    the intended gene is not called offtarget.
 4. Optionally `--variants`: drop dbSNP `common_all` overlaps.
 
-Docs: [methods](docs/methods.md) · [resources](docs/resources.md) ·
-[limitations](docs/limitations.md).
+Details: [docs/guide.md](docs/guide.md).
 
 ## Setup
 
