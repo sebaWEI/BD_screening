@@ -28,23 +28,23 @@ Write-Host "==> Python project"
 uv python install 3.12
 uv sync
 
-$missing = @("RNAup", "blastn", "makeblastdb", "tabix") | Where-Object {
+$missing = @("blastn", "makeblastdb", "tabix") | Where-Object {
     -not (Get-Command $_ -ErrorAction SilentlyContinue)
 }
 
-Write-Host "==> RNAup, BLAST+, tabix"
+Write-Host "==> BLAST+, tabix"
 if (-not $missing) {
     Write-Host "Already on PATH."
 }
 elseif (Get-Command conda -ErrorAction SilentlyContinue) {
-    conda install -y -c conda-forge -c bioconda viennarna blast htslib
+    conda install -y -c bioconda blast htslib
 }
 else {
     Write-Error @"
-conda is not on PATH, so RNAup, BLAST+, and tabix were not installed.
+conda is not on PATH, so BLAST+ and tabix were not installed.
 
 Install Miniforge (https://github.com/conda-forge/miniforge#miniforge3), open a conda PowerShell, then:
-  conda install -y -c conda-forge -c bioconda viennarna blast htslib
+  conda install -y -c bioconda blast htslib
 
 Re-run .\scripts\setup.ps1 with that environment activated.
 "@

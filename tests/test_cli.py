@@ -20,7 +20,8 @@ def test_help_check_requirements_and_config(tmp_path: Path, monkeypatch) -> None
     assert runner.invoke(app, ["--help"]).exit_code == 0
     checked = runner.invoke(app, ["check_requirements"])
     assert checked.exit_code == 1
-    assert "RNAup" in checked.stdout
+    assert "blastn" in checked.stdout
+    assert "RNAup" not in checked.stdout
     listed = runner.invoke(app, ["resources"])
     assert listed.exit_code == 0
     assert "GENCODE" in listed.stdout
@@ -31,7 +32,7 @@ def test_help_check_requirements_and_config(tmp_path: Path, monkeypatch) -> None
 
 
 def test_check_requirements_ok_with_required_binaries(tmp_path: Path, monkeypatch) -> None:
-    for name in ("RNAup", "blastn", "makeblastdb"):
+    for name in ("blastn", "makeblastdb"):
         exe = tmp_path / name
         exe.write_text("#!/bin/sh\nexit 0\n")
         exe.chmod(0o755)
@@ -47,6 +48,7 @@ def test_filter_help_requires_gene() -> None:
     assert result.exit_code == 0
     assert "--gene" in result.stdout
     assert "--sites" in result.stdout
-    assert "--rnaup" in result.stdout
+    assert "--variants" in result.stdout
+    assert "--rnaup" not in result.stdout
     missing = runner.invoke(app, ["filter", "--utr", "examples/LETM1.fasta"])
     assert missing.exit_code != 0

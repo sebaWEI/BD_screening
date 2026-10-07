@@ -176,18 +176,6 @@ BLASTN_SHORT: dict[str, Any] = {
     "default_min_length": 20,
 }
 
-RNAUP: dict[str, Any] = {
-    "id": "rnaup",
-    "role": "interaction_energy",
-    "producer": "ViennaRNA",
-    "program": "RNAup",
-    "manual": "https://www.tbi.univie.ac.at/RNA/ViennaRNA/doc/html/man/RNAup.html",
-    "interaction_first": True,
-    "window": 40,
-    "temp_celsius": 37.0,
-    "context": 120,
-}
-
 # ---------------------------------------------------------------------------
 # Bundled example 3′UTRs (coordinates are 0-based BED)
 # ---------------------------------------------------------------------------
@@ -213,7 +201,7 @@ EXAMPLE_NSD2: dict[str, Any] = {
     "id": "example_nsd2",
     "role": "example_target",
     "producer": "bsst examples (Ensembl-style 3′UTR FASTA)",
-    "path": "examples/NSD2.FASTA",
+    "path": "examples/NSD2.fasta",
     "gene": "NSD2",
     "transcript_id": "ENST00000508803",
     "gencode_v45_record": (
@@ -235,7 +223,6 @@ def catalog() -> tuple[dict[str, Any], ...]:
         GENCODE_V45_ANNOTATION,
         ENSEMBL_REST,
         BLASTN_SHORT,
-        RNAUP,
         EXAMPLE_LETM1,
         EXAMPLE_NSD2,
     )

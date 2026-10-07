@@ -27,15 +27,10 @@ def test_missing_and_repeated_sites_are_not_pending() -> None:
     assert placed["status"].eq("pending").sum() == 0
 
 
-def test_omitted_sites_slide_and_optional_stages_stay_off(tmp_path: Path, monkeypatch) -> None:
-    calls = {"rnaup": 0, "variants": 0}
-
-    def rnaup(*_args, **_kwargs):
-        calls["rnaup"] += 1
-        raise AssertionError("RNAup should stay off")
+def test_omitted_sites_slide_and_variant_stage_stays_off(tmp_path: Path, monkeypatch) -> None:
+    calls = {"variants": 0}
 
     monkeypatch.setattr("bsst.pipeline.run_blast", _empty_blast)
-    monkeypatch.setattr("bsst.pipeline.run_rnaup_candidate", rnaup)
     monkeypatch.setattr(
         "bsst.pipeline.read_variant_vcf",
         lambda *_args, **_kwargs: calls.__setitem__("variants", 1),
@@ -50,14 +45,13 @@ def test_omitted_sites_slide_and_optional_stages_stay_off(tmp_path: Path, monkey
     table = pd.read_csv(run_dir / "candidates.tsv", sep="\t")
     assert len(table) == len(generate_windows(target, 40))
     assert set(table["status"]) == {"pass"}
-    assert table["rank"].isna().all()
-    assert calls == {"rnaup": 0, "variants": 0}
+    assert calls == {"variants": 0}
     log = (run_dir / "run.log").read_text()
     assert "variant filtering off" in log
-    assert "stage=rnaup" in log
+    assert "stage=rnaup" not in log
 
 
-def test_rnaup_ranks_only_sites_that_passed(tmp_path: Path, monkeypatch) -> None:
+def test_blast_drop_keeps_only_passing_sites(tmp_path: Path, monkeypatch) -> None:
     def blast(candidates, *_args, **_kwargs):
         return pd.DataFrame([{
             "qseqid": "bad", "offtarget_risk": True, "length": 20, "pident": 100.0,
@@ -66,27 +60,22 @@ def test_rnaup_ranks_only_sites_that_passed(tmp_path: Path, monkeypatch) -> None
             "sseqid": "ENST1", "match_region": "3'UTR", "evalue": 0.5,
         }])
 
-    def rnaup(_target, row, *_args, **_kwargs):
-        return {"status": "eligible", "rnaup_dG_total": -10.0 if row["name"] == "keep" else -1.0}
-
     monkeypatch.setattr("bsst.pipeline.run_blast", blast)
-    monkeypatch.setattr("bsst.pipeline.run_rnaup_candidate", rnaup)
     target = Target("AACCGGTT", "utr", gene="GENE")
     run_dir = select(
         target,
         runs_dir=tmp_path,
         blast_db="unused",
         sites=[("keep", "AACC"), ("bad", "GGTT"), ("gone", "TTTT")],
-        use_rnaup=True,
         self_tokens=["GENE"],
     )
     all_rows = pd.read_csv(run_dir / "all_binding_sites.tsv", sep="\t")
     reasons = dict(zip(all_rows["name"], all_rows["failure_reason"].fillna(""), strict=True))
     assert reasons["gone"] == "not_in_utr"
     assert reasons["bad"].startswith("3'UTR of OTHER")
-    ranked = pd.read_csv(run_dir / "candidates.tsv", sep="\t")
-    assert ranked["name"].tolist() == ["keep"]
-    assert ranked.loc[0, "rank"] == 1
+    passed = pd.read_csv(run_dir / "candidates.tsv", sep="\t")
+    assert passed["name"].tolist() == ["keep"]
+    assert set(passed["status"]) == {"pass"}
 
 
 def test_readable_blast_matches_collapse_to_one_gene() -> None:
@@ -127,4 +116,31 @@ def test_readable_blast_matches_collapse_to_one_gene() -> None:
     assert row["transcript_start"] == 80
     assert row["transcript_end"] == 100
     assert row["n_transcripts"] == 2
+    assert row["drops_site"] == "yes"
+
+
+def test_readable_blast_matches_prefers_utr_drop_over_longer_cds() -> None:
+    base = (
+        "ENST000001.1|ENSG000001.1|OTTHUMG1|OTTHUMT1|"
+        "OTHER-201|OTHER|3000|protein_coding|"
+    )
+    hits = pd.DataFrame([
+        {
+            "qseqid": "site", "stitle": base, "sseqid": "cds", "pident": 100.0,
+            "length": 30, "qstart": 1, "qend": 30, "sstart": 500, "send": 529,
+            "evalue": 0.01, "is_self": False, "offtarget_risk": False,
+            "match_region": "",
+        },
+        {
+            "qseqid": "site", "stitle": base.replace("OTHER-201", "OTHER-202"),
+            "sseqid": "utr", "pident": 95.0, "length": 22, "qstart": 5, "qend": 26,
+            "sstart": 10, "send": 31, "evalue": 0.2, "is_self": False,
+            "offtarget_risk": True, "match_region": "3'UTR",
+        },
+    ])
+    table = readable_blast_matches(hits)
+    assert len(table) == 1
+    row = table.iloc[0]
+    assert row["region"] == "3'UTR"
+    assert row["aligned_nt"] == 22
     assert row["drops_site"] == "yes"

@@ -26,30 +26,28 @@ uv python install 3.12
 uv sync
 
 need_native=0
-for cmd in RNAup blastn makeblastdb tabix; do
+for cmd in blastn makeblastdb tabix; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     need_native=1
   fi
 done
 
-echo "==> RNAup, BLAST+, tabix"
+echo "==> BLAST+, tabix"
 if [[ "$need_native" -eq 0 ]]; then
   echo "Already on PATH."
 elif command -v brew >/dev/null 2>&1; then
-  brew tap brewsci/bio
-  brew install brewsci/bio/viennarna blast htslib
+  brew install blast htslib
 elif command -v conda >/dev/null 2>&1; then
-  conda install -y -c conda-forge -c bioconda viennarna blast htslib
+  conda install -y -c bioconda blast htslib
 else
   cat >&2 <<'EOF'
-Neither Homebrew nor conda is on PATH, so RNAup, BLAST+, and tabix were not installed.
+Neither Homebrew nor conda is on PATH, so BLAST+ and tabix were not installed.
 
 macOS (Homebrew):
-  brew tap brewsci/bio
-  brew install brewsci/bio/viennarna blast htslib
+  brew install blast htslib
 
-Linux / macOS without Homebrew (conda supplies blastn, RNAup, and tabix only):
-  conda install -y -c conda-forge -c bioconda viennarna blast htslib
+Linux / macOS without Homebrew:
+  conda install -y -c bioconda blast htslib
 
 Then re-run ./scripts/setup.sh
 EOF

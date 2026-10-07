@@ -1,3 +1,3 @@
-"""Binding Site Selection Tool (bsst) for Hepha antisense domains."""
+"""bsst: BLAST + optional variant safety filter for Hepha 3′UTR sites."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

@@ -11,7 +11,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,10 +29,6 @@ from .resources import BLASTN_SHORT, discover_utr_index
 WINDOW_COLUMNS = [
     "name", "chrom", "start", "end", "strand", "utr_start", "utr_end",
     "target_sequence", "bd_sequence", "gc_fraction", "status", "failure_reason",
-    "rnaup_dG_total", "rnaup_dG_duplex", "rnaup_dGu_target", "rnaup_dGu_query",
-    "interaction_target_start", "interaction_target_end",
-    "interaction_query_start", "interaction_query_end",
-    "interaction_utr_start", "interaction_utr_end", "anchor_overlap", "rank",
     "model_version",
 ]
 BLAST_COLUMNS = [
@@ -273,101 +268,6 @@ def variant_overlaps(
     return any(_chrom(chrom) == vc and start < ve and vs < end for vc, vs, ve, _ in variants)
 
 
-def parse_rnaup_output(text: str) -> dict[str, float | int] | None:
-    energy = re.search(
-        r"\(\s*(-?\d+(?:\.\d+)?)\s*=\s*(-?\d+(?:\.\d+)?)\s*\+\s*"
-        r"(-?\d+(?:\.\d+)?)\s*\+\s*(-?\d+(?:\.\d+)?)\s*\)",
-        text,
-    )
-    coords = re.search(r"(\d+)\s*,\s*(\d+)\s*:\s*(\d+)\s*,\s*(\d+)", text)
-    if not energy or not coords:
-        return None
-    return {
-        "rnaup_dG_total": float(energy.group(1)),
-        "rnaup_dG_duplex": float(energy.group(2)),
-        "rnaup_dGu_target": float(energy.group(3)),
-        "rnaup_dGu_query": float(energy.group(4)),
-        "interaction_target_start": int(coords.group(1)),
-        "interaction_target_end": int(coords.group(2)),
-        "interaction_query_start": int(coords.group(3)),
-        "interaction_query_end": int(coords.group(4)),
-    }
-
-
-def anchor_interaction(
-    parsed: dict[str, float | int],
-    slice_utr_start: int,
-    candidate_utr_start: int,
-    candidate_utr_end: int,
-    min_overlap: float = 1.0,
-) -> tuple[bool, float, int, int]:
-    local_start = min(int(parsed["interaction_target_start"]), int(parsed["interaction_target_end"])) - 1
-    local_end = max(int(parsed["interaction_target_start"]), int(parsed["interaction_target_end"]))
-    utr_start, utr_end = slice_utr_start + local_start, slice_utr_start + local_end
-    overlap = max(0, min(utr_end, candidate_utr_end) - max(utr_start, candidate_utr_start))
-    interaction_length = max(1, utr_end - utr_start)
-    fraction = overlap / interaction_length
-    return fraction >= min_overlap, fraction, utr_start, utr_end
-
-
-def run_rnaup_candidate(
-    target: Target,
-    row: pd.Series,
-    options: SelectOptions,
-    logger: logging.Logger,
-    rnaup_exe: str | None = None,
-) -> dict[str, object]:
-    exe = resolve_executable("RNAup", rnaup_exe)
-    if not exe:
-        return {"status": "failed", "failure_reason": "RNAup_not_found"}
-    utr_start, utr_end = int(row["utr_start"]), int(row["utr_end"])
-    slice_start = max(0, utr_start - options.context)
-    slice_end = min(len(target.sequence), utr_end + options.context)
-    target_rna = target.sequence[slice_start:slice_end].upper().replace("T", "U")
-    query_rna = str(row["bd_sequence"]).upper().replace("T", "U")
-    command = [
-        exe, "--interaction_first", "--window", str(options.window_size),
-        "--temp", str(options.temperature),
-    ]
-    if options.include_both:
-        command.append("--include_both")
-    try:
-        with tempfile.TemporaryDirectory(prefix="bsst_rnaup_") as work_dir:
-            proc = subprocess.run(
-                command,
-                input=f">target\n{target_rna}\n>query\n{query_rna}\n",
-                capture_output=True,
-                text=True,
-                timeout=120,
-                cwd=work_dir,
-            )
-    except subprocess.TimeoutExpired as exc:
-        logger.error("RNAup timeout candidate=%s timeout=%s", row["name"], exc.timeout)
-        return {"status": "failed", "failure_reason": "RNAup_timeout"}
-    except OSError as exc:
-        logger.error("RNAup execution failed candidate=%s error=%s", row["name"], exc)
-        return {"status": "failed", "failure_reason": "RNAup_execution_error"}
-    log_command(logger, command, proc.returncode, proc.stdout, proc.stderr)
-    if proc.returncode:
-        return {"status": "failed", "failure_reason": f"RNAup_exit_{proc.returncode}"}
-    parsed = parse_rnaup_output(proc.stdout)
-    if parsed is None:
-        return {"status": "failed", "failure_reason": "RNAup_parse_error"}
-    anchored, overlap, hit_start, hit_end = anchor_interaction(
-        parsed, slice_start, utr_start, utr_end, options.min_anchor_overlap
-    )
-    parsed.update(
-        {
-            "interaction_utr_start": hit_start,
-            "interaction_utr_end": hit_end,
-            "anchor_overlap": overlap,
-            "status": "eligible" if anchored else "failed",
-            "failure_reason": "" if anchored else "off_anchor_interaction",
-        }
-    )
-    return parsed
-
-
 def _accession_keys(token: str) -> set[str]:
     """Exact token plus Ensembl/RefSeq-style identifier without trailing .version."""
     value = str(token).strip().lower()
@@ -456,8 +356,12 @@ def readable_blast_matches(hits: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=columns)
     frame = pd.DataFrame(rows)
     counts = frame.groupby(["site", "_key"]).size().rename("n_transcripts")
+    # Prefer a UTR hit that drops the site over a longer CDS-only alignment
+    # for the same gene, so the readable row matches the filter decision.
+    frame["_utr"] = frame["region"].str.contains("UTR", na=False)
     frame = frame.sort_values(
-        ["aligned_nt", "identity_pct"], ascending=[False, False]
+        ["drops_site", "_utr", "aligned_nt", "identity_pct"],
+        ascending=[False, False, False, False],
     ).drop_duplicates(["site", "_key"])
     frame = frame.merge(counts.reset_index(), on=["site", "_key"])
     frame["drops_site"] = frame["drops_site"].map({True: "yes", False: "no"})
@@ -611,9 +515,7 @@ def select(
     blast_db: str | None = None,
     sites: list[tuple[str, str]] | None = None,
     use_variants: bool = False,
-    use_rnaup: bool = False,
     self_tokens: Iterable[str] = (),
-    rnaup_exe: str | None = None,
     blastn_exe: str | None = None,
 ) -> Path:
     options = options or SelectOptions()
@@ -704,31 +606,13 @@ def select(
             logger.info("variant filtering off")
         manifest["stage_counts"]["after_variants"] = int(active.sum())
 
-        logger.info("stage=rnaup")
-        if use_rnaup:
-            if active.any() and not resolve_executable("RNAup", rnaup_exe):
-                raise RuntimeError(
-                    "RNAup was requested but was not found; run `bsst check_requirements`."
-                )
-            for idx, row in all_candidates.loc[active].iterrows():
-                result = run_rnaup_candidate(target, row, options, logger, rnaup_exe)
-                for key, value in result.items():
-                    all_candidates.loc[idx, key] = value
-            passed = all_candidates["status"].eq("eligible")
-        else:
-            all_candidates.loc[active, "status"] = "pass"
-            passed = all_candidates["status"].eq("pass")
+        all_candidates.loc[active, "status"] = "pass"
+        passed = all_candidates["status"].eq("pass")
 
         for column in WINDOW_COLUMNS:
             if column not in all_candidates:
                 all_candidates[column] = pd.NA
-        if use_rnaup:
-            ranked = all_candidates.loc[passed].sort_values("rnaup_dG_total").copy()
-            ranked["rank"] = range(1, len(ranked) + 1)
-            all_candidates.loc[ranked.index, "rank"] = ranked["rank"]
-            passed_table = all_candidates.loc[passed, WINDOW_COLUMNS].sort_values("rank")
-        else:
-            passed_table = all_candidates.loc[passed, WINDOW_COLUMNS]
+        passed_table = all_candidates.loc[passed, WINDOW_COLUMNS]
         all_candidates[WINDOW_COLUMNS].to_csv(run_dir / "all_binding_sites.tsv", sep="\t", index=False)
         passed_table.to_csv(run_dir / "candidates.tsv", sep="\t", index=False)
         manifest["status"] = "completed"
@@ -743,10 +627,8 @@ def select(
         manifest["error"] = str(exc)
         raise
     finally:
-        rnaup = resolve_executable("RNAup", rnaup_exe)
         blastn = resolve_executable("blastn", blastn_exe)
         manifest["tools"] = {
-            "RNAup": _tool_version(rnaup, "--version"),
             "blastn": _tool_version(blastn, "-version"),
         }
         write_manifest(run_dir / "manifest.json", manifest)

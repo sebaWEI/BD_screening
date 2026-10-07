@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bsst"
-version = "0.3.0"
-description = "Binding Site Selection Tool for Hepha antisense domains on 3'UTR targets"
+version = "0.4.0"
+description = "BD_screening: BLAST + optional variant filter for Hepha 3′UTR binding sites"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -42,5 +42,5 @@ include = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-  "integration: native RNAup or network archive checks",
+  "integration: network archive checks",
 ]

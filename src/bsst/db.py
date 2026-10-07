@@ -265,11 +265,6 @@ def tool_report() -> list[dict[str, str]]:
     fasta = bundled_gencode_fasta()
     rows = [
         _row(
-            "RNAup",
-            resolve_executable("RNAup"),
-            bool(resolve_executable("RNAup")),
-        ),
-        _row(
             "blastn",
             resolve_executable("blastn"),
             bool(resolve_executable("blastn")),

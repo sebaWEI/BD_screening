@@ -26,9 +26,9 @@ def test_pinned_resource_identifiers() -> None:
     assert ids == [
         "dbsnp_b151_grch38p7_common_all",
         "gencode_v45_transcripts_chr",
+        "gencode_v45_annotation_chr_gff3",
         "ensembl_rest_111",
         "blastn_short",
-        "rnaup",
         "example_letm1",
         "example_nsd2",
     ]

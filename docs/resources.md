@@ -15,9 +15,8 @@ The pipeline records each producer string separately.
 | UTR annotation | GENCODE `gencode.v45.annotation.gff3.gz` | Release 45 CHR; 5′UTR and 3′UTR projected onto spliced transcripts | GRCh38.p14  |
 | 3′UTR fetch    | `https://e111.rest.ensembl.org`         | Ensembl 111                            | GRCh38.p14  |
 | Off-target     | NCBI BLAST+ `blastn -task blastn-short` | local `blastn -version`                | —           |
-| Binding energy | ViennaRNA `RNAup`                       | local `RNAup --version`                | —           |
 | Example LETM1  | `examples/LETM1.fasta` + `examples/LETM1.sites.fasta` | ENST00000302787; 9 wet-lab 3′UTR tiles | chrom=4 BED |
-| Example NSD2   | `examples/NSD2.FASTA` + `examples/NSD2.sites.fasta` | ENST00000508803; 18 wet-lab 3′UTR tiles | chrom=4 BED |
+| Example NSD2   | `examples/NSD2.fasta` + `examples/NSD2.sites.fasta` | ENST00000508803; 18 wet-lab 3′UTR tiles | chrom=4 BED |
 
 
 `--utr` is the durable path. Omitting it talks only to the Ensembl 111

@@ -22,7 +22,7 @@ from .resources import (
     discover_variant_vcf,
 )
 
-app = typer.Typer(help="bsst: BLAST filter for Hepha antisense sites. RNAup ranking is off unless --rnaup.")
+app = typer.Typer(help="bsst: BLAST + optional variant filter for Hepha antisense sites.")
 db_app = typer.Typer(help="Manage local database configuration.")
 config_app = typer.Typer(help="Inspect configuration.")
 app.add_typer(db_app, name="db")
@@ -101,7 +101,7 @@ def db_init(
     )
     console.print(f"Database directory: {directory}")
     console.print(f"Configuration: {path}")
-    console.print("BLAST+ and RNAup are external system tools and are not installed by uv.")
+    console.print("BLAST+ is an external system tool and is not installed by uv.")
 
 
 @app.command("check_requirements")
@@ -113,7 +113,6 @@ def check_requirements() -> None:
         table.add_row(row["resource"], row["value"], row["status"])
     console.print(table)
     console.print("A BLAST filter needs blastn, makeblastdb, blast_db, and gencode_utr_index `ok`.")
-    console.print("RNAup is optional and used only with `bsst filter --rnaup`.")
     console.print("variant_vcf is optional and used only with `bsst filter --variants`.")
     console.print("tabix is optional but recommended for large VCF region queries.")
     failed = [row for row in report if row["status"] in {"missing", "mismatch"}]
@@ -126,7 +125,7 @@ def check_requirements() -> None:
         console.print(
             "[yellow]Optional items still missing: "
             + ", ".join(optional_missing)
-            + ". Finish `db init` before `bsst filter`, or pass `--variants` / `--rnaup` only when those tools are present.[/yellow]"
+            + ". Finish `db init` before `bsst filter`, or pass `--variants` only when the VCF is present.[/yellow]"
         )
 
 
@@ -137,21 +136,12 @@ def resources_cmd() -> None:
     for item in catalog():
         table.add_row(
             str(item.get("role", "")),
-            str(item.get("producer") or item.get("id")),
-            str(
-                item.get("variant_release")
-                or item.get("transcriptome_release")
-                or item.get("release")
-                or item.get("ensembl_version")
-                or item.get("task")
-                or item.get("program")
-                or ("live" if item.get("pinned") is False else "")
-            ),
-            str(item.get("assembly") or "—"),
-            str(item.get("url") or item.get("base_url") or item.get("path") or item.get("manual") or item.get("docs_url") or ""),
+            str(item.get("producer") or item.get("program") or item.get("id", "")),
+            str(item.get("release") or item.get("ensembl_version") or ""),
+            str(item.get("assembly") or ""),
+            str(item.get("url") or item.get("path") or item.get("manual") or ""),
         )
     console.print(table)
-    console.print("Verification steps: docs/resources.md")
 
 
 @config_app.command("show")
@@ -162,70 +152,56 @@ def config_show() -> None:
 def _options(
     window_size: int,
     step: int,
-    context: int,
-    temperature: float,
-    include_both: bool,
-    min_anchor_overlap: float,
     min_af: float | None,
     offtarget_min_length: int,
 ) -> SelectOptions:
     return SelectOptions(
         window_size=window_size,
         step=step,
-        context=context,
-        temperature=temperature,
-        include_both=include_both,
-        min_anchor_overlap=min_anchor_overlap,
         min_af=min_af,
         offtarget_min_length=offtarget_min_length,
     )
 
 
 def _load_utr(
-    fasta: Path,
+    utr: Path,
     gene: str,
     chrom: str | None,
     start: int | None,
     end: int | None,
     strand: str | None,
 ) -> Target:
-    if strand is not None and strand not in {"+", "-"}:
-        raise typer.BadParameter("strand must be + or -")
-    record = SeqIO.read(fasta, "fasta")
-    header = _header_metadata(record.description)
-    chrom = chrom or header.get("chrom")
-    start = start if start is not None else (
-        int(header["start"]) if "start" in header else None
+    records = list(SeqIO.parse(str(utr), "fasta"))
+    if len(records) != 1:
+        raise typer.BadParameter(f"--utr must contain exactly one sequence, found {len(records)}")
+    record = records[0]
+    meta = _header_metadata(record.description)
+    resolved_strand = strand or meta.get("strand") or "+"
+    resolved_chrom = chrom or meta.get("chrom")
+    resolved_start = start if start is not None else (
+        int(meta["start"]) if "start" in meta else None
     )
-    end = end if end is not None else (
-        int(header["end"]) if "end" in header else None
+    resolved_end = end if end is not None else (
+        int(meta["end"]) if "end" in meta else None
     )
-    strand = strand or (
-        header["strand"] if header.get("strand") in {"+", "-"} else "+"
-    )
-    transcript_id = None
-    name_match = re.fullmatch(
-        r"([A-Za-z0-9.-]+)_(ENST[0-9]+(?:\.[0-9]+)?)", record.id
-    )
-    if name_match:
-        transcript_id = name_match.group(2)
     return Target(
-        sequence=str(record.seq).upper(), name=record.id, chrom=chrom,
-        start=start, end=end, strand=strand, gene=gene,
-        transcript_id=transcript_id, source=f"FASTA: {fasta}",
+        str(record.seq),
+        record.id,
+        chrom=resolved_chrom,
+        start=resolved_start,
+        end=resolved_end,
+        strand=resolved_strand,
+        gene=gene,
     )
 
 
-def _load_sites(fasta: Path) -> list[tuple[str, str]]:
-    sites = [(record.id, str(record.seq)) for record in SeqIO.parse(fasta, "fasta")]
-    if not sites:
-        raise typer.BadParameter("sites FASTA has no records")
-    return sites
+def _load_sites(path: Path) -> list[tuple[str, str]]:
+    return [(rec.id, str(rec.seq)) for rec in SeqIO.parse(str(path), "fasta")]
 
 
 @app.command("filter")
-def filter_sites(
-    gene: str = typer.Option(..., "--gene", help="Gene symbol used to ignore self BLAST hits."),
+def filter_cmd(
+    gene: str = typer.Option(..., "--gene", help="Gene symbol; required so self BLAST hits are ignored."),
     utr: Path | None = typer.Option(
         None, "--utr", exists=True, readable=True,
         help="3'UTR FASTA. Omitted sequences are fetched from Ensembl 111.",
@@ -243,13 +219,8 @@ def filter_sites(
     variant_vcf: Path | None = typer.Option(None, "--variant-vcf"),
     blast_db: str | None = typer.Option(None),
     variants: bool = typer.Option(False, "--variants", help="Drop sites overlapping dbSNP common_all."),
-    rnaup: bool = typer.Option(False, "--rnaup", help="Score sites that passed the filter and rank by ΔG."),
     window_size: int = typer.Option(40),
     step: int = typer.Option(1),
-    context: int = typer.Option(120),
-    temperature: float = typer.Option(37.0),
-    include_both: bool = typer.Option(False),
-    min_anchor_overlap: float = typer.Option(1.0),
     min_af: float | None = typer.Option(
         None, min=0.0, max=1.0, help="With --variants, ignore variants below this frequency."
     ),
@@ -275,16 +246,12 @@ def filter_sites(
     resolved_blast = blast_db or cfg.get("blast_db") or discover_blast_db()
     run_dir = select(
         target,
-        _options(
-            window_size, step, context, temperature, include_both,
-            min_anchor_overlap, min_af, offtarget_min_length,
-        ),
+        _options(window_size, step, min_af, offtarget_min_length),
         runs_dir=runs_dir or Path(cfg["runs_dir"]),
         variant_vcf=resolved_vcf,
         blast_db=resolved_blast,
         sites=_load_sites(sites) if sites else None,
         use_variants=variants,
-        use_rnaup=rnaup,
         self_tokens=[token for token in (gene, target.transcript_id) if token],
     )
     console.print(f"Run completed: {run_dir}")

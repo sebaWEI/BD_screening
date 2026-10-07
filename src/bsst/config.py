@@ -19,7 +19,6 @@ def default_config() -> dict[str, Any]:
         "db_dir": str(config_dir() / "db"),
         "variant_vcf": None,
         "blast_db": None,
-        "rnaup_exe": None,
         "blastn_exe": None,
         "assembly": None,
         "variant_source": None,

@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 
-MODEL_VERSION = "utr3-rnaup-anchor-v1"
+MODEL_VERSION = "utr3-blast-variant-v1"
 
 
 @dataclass(frozen=True)
@@ -47,10 +47,6 @@ class Target:
 class SelectOptions:
     window_size: int = 40
     step: int = 1
-    context: int = 120
-    temperature: float = 37.0
-    include_both: bool = False
-    min_anchor_overlap: float = 1.0
     min_gc: float = 0.3
     max_gc: float = 0.7
     max_homopolymer: int = 4
@@ -60,12 +56,10 @@ class SelectOptions:
     min_coverage: float = 0.0
 
     def __post_init__(self) -> None:
-        if self.window_size <= 0 or self.step <= 0 or self.context < 0:
-            raise ValueError("window_size/step must be positive and context non-negative")
+        if self.window_size <= 0 or self.step <= 0:
+            raise ValueError("window_size/step must be positive")
         if not 0 <= self.min_gc <= self.max_gc <= 1:
             raise ValueError("GC thresholds must satisfy 0 <= min_gc <= max_gc <= 1")
-        if not 0 <= self.min_anchor_overlap <= 1:
-            raise ValueError("min_anchor_overlap must be between 0 and 1")
         if self.min_af is not None and not 0 <= self.min_af <= 1:
             raise ValueError("min_af must be between 0 and 1")
         if self.offtarget_min_length <= 0:

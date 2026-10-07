@@ -1,9 +1,0 @@
-# Compatibility only. Prefer `uv sync`, which reads pyproject.toml.
-biopython>=1.83
-pandas>=2.2
-requests>=2.31
-rich>=13.7
-typer>=0.12
-
-# RNAup (ViennaRNA) and BLAST+ are external native tools.
-# They are intentionally not represented as pip/uv dependencies.
