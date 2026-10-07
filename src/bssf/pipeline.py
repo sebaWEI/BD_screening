@@ -24,7 +24,7 @@ from .config import load_config
 from .logging import log_command, run_logger, write_manifest
 from .models import MODEL_VERSION, SelectOptions, Target
 from .annotation import load_utr_index, utr_regions
-from .resources import BLASTN_SHORT, discover_utr_index
+from .resources import BLASTN_SHORT, discover_utr_index, network_environ
 
 WINDOW_COLUMNS = [
     "name", "chrom", "start", "end", "strand", "utr_start", "utr_end",
@@ -263,21 +263,39 @@ def _tabix_vcf_lines(
     if not tabix:
         return None
     source_s = str(source)
-    if not _is_http_source(source_s):
+    http = _is_http_source(source_s)
+    if not http:
         index = Path(source_s + ".tbi")
         if not index.is_file():
             return None
     contig = _tabix_query_contig(chrom, gcf=gcf)
     region = f"{contig}:{start + 1}-{end}"
-    proc = subprocess.run(
-        [tabix, source_s, region],
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
-    if proc.returncode != 0:
-        return None
-    return [line for line in proc.stdout.splitlines() if line.strip()]
+    # Remote GCF queries often need a proxy; direct NCBI can hang until timeout.
+    timeout_s = 300 if http else 60
+    last_err: Exception | None = None
+    for attempt in range(1, 4 if http else 2):
+        try:
+            proc = subprocess.run(
+                [tabix, source_s, region],
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                env=network_environ() if http else None,
+            )
+        except subprocess.TimeoutExpired as exc:
+            last_err = exc
+            continue
+        if proc.returncode != 0:
+            last_err = RuntimeError((proc.stderr or proc.stdout or "tabix failed").strip()[:300])
+            continue
+        return [line for line in proc.stdout.splitlines() if line.strip()]
+    if http and last_err is not None:
+        raise RuntimeError(
+            f"tabix timed out or failed for {source_s} ({region}) after retries. "
+            "Set https_proxy (e.g. http://127.0.0.1:7897) if NCBI HTTPS is blocked, "
+            f"or check network. Last error: {last_err}"
+        ) from last_err
+    return None
 
 
 def _looks_like_gcf_dbsnp(source: str | Path) -> bool:

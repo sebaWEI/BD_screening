@@ -8,8 +8,27 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
+import socket
 from pathlib import Path
 from typing import Any
+
+
+def network_environ() -> dict[str, str]:
+    """Env for HTTPS tools (tabix). Keep existing proxies; else probe local ports."""
+    env = os.environ.copy()
+    if any(env.get(k) for k in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY", "ALL_PROXY")):
+        return env
+    for port in (7897, 7890, 1087, 8080):
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.15):
+                proxy = f"http://127.0.0.1:{port}"
+                for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+                    env[key] = proxy
+                return env
+        except OSError:
+            continue
+    return env
 
 # ---------------------------------------------------------------------------
 # NCBI dbSNP (GRCh38.p14) — tabix region queries
@@ -349,6 +368,7 @@ def verify_dbsnp_tabix(source: str | Path) -> tuple[bool, str]:
             capture_output=True,
             text=True,
             timeout=120,
+            env=network_environ(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return False, str(exc)

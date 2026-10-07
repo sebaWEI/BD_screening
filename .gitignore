@@ -36,6 +36,8 @@ Thumbs.db
 runs/
 *.log
 *.xlsx
+*.pid
+*.nohup.out
 
 # Large scientific downloads (see data/README.md)
 data/*.vcf
@@ -53,7 +55,8 @@ data/*.not
 data/*.nsq
 data/*.ntf
 data/*.nto
-data/*.tbi
+*.tbi
+GCF_*.gz
 human_transcriptome.fasta
 human_transcriptome_db.*
 
